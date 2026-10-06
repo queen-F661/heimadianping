@@ -17,12 +17,13 @@ import javax.servlet.http.HttpSession;
  */
 public interface IUserService extends IService<User> {
 
+    /**
+     * 实现当前短信验证的方法
+     * */
     Result sendCode(String phone, HttpSession session);
 
+    /**
+     * 登录功能
+     * */
     Result login(LoginFormDTO loginForm, HttpSession session);
-
-    Result sign();
-
-    Result signCount();
-
 }

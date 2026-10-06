@@ -18,6 +18,7 @@ spring:
         max-idle: 10
         min-idle: 1
         time-between-eviction-runs: 10s
+# 这个做的作用就是当前转换成json格式的时候 碰到json格式就忽略
   jackson:
     default-property-inclusion: non_null # JSON处理时忽略非空字段
 mybatis-plus:
