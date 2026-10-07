@@ -15,9 +15,13 @@ public class MvcConfig implements WebMvcConfigurer{
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
+    /**
+     * 这个配置当前的拦截器  分为专门用来数据刷新的 还有一个是判断当前有没有值 如果有值,就直接把这个值给他放行
+     * */
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(new LoginInterceptor(stringRedisTemplate))
+        // 登录拦截器
+        registry.addInterceptor(new LoginInterceptor())
                 .excludePathPatterns(
                 "/shop/**",
                 "/voucher/**",
@@ -26,7 +30,9 @@ public class MvcConfig implements WebMvcConfigurer{
                 "/blog/hot",
                 "/user/code",
                 "/user/login"
-                );
+                ).order(1);
+        // 刷新并存储当前user里面的值
+        registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate)).addPathPatterns("/**").order(0);
     }
 
 }

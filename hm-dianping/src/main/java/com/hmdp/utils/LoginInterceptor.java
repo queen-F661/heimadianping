@@ -21,19 +21,6 @@ import java.util.concurrent.TimeUnit;
 import static com.hmdp.utils.RedisConstants.LOGIN_USER_KEY;
 
 public class LoginInterceptor implements HandlerInterceptor {
-
-
-    /**
-     * 因为这个类没有放到Ioc容器中进行
-     * 所以他就不会自动的注入 所以我们只能使用构造函数的方式进行注入
-     * */
-    private StringRedisTemplate stringRedisTemplate;
-
-
-    public LoginInterceptor(StringRedisTemplate stringRedisTemplate) {
-        this.stringRedisTemplate = stringRedisTemplate;
-    }
-
     /**
      * 在controller执行之前执行
      * false 拦截
@@ -41,34 +28,13 @@ public class LoginInterceptor implements HandlerInterceptor {
      * */
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-        // TODO 1.获取token 从前端请求头中获取过来
-        // HttpSession session = request.getSession();
-        String token = request.getHeader("authorization");
-
-        if (StringUtil.isBlank(token)) {
-            // 拦截并返回数据
+        if(UserHolder.getUser() == null){
+            // 没有 需要设置拦截器,设置状态码
             response.setStatus(401);
+            // 拦截
             return false;
         }
-
-        // 2.根据当前token来获取当前的redis value还有没有值
-        // UserDTO user = (UserDTO) session.getAttribute("user");
-        Map<Object, Object> user = stringRedisTemplate.opsForHash().entries(LOGIN_USER_KEY + token);
-
-        // 判断当前entries有没有值
-        // 3.判断当前用户是否存在
-        if(user.isEmpty()){
-            // 4.如果不存在,就直接拦截
-            response.setStatus(401);
-            return false;
-        }
-        // 因为你要转换成当前的dto对象才能把数据存进去(进行转换(Map -> dto)) 对象
-        // 第一个参数 是当前map 第二个是对象 第三个是当前错误要不要忽略
-        UserDTO userDTO = BeanUtil.fillBeanWithMap(user, new UserDTO(), false);
-        // 5.如果存在,就把当前数据存在线程域里面了
-        UserHolder.saveUser(userDTO);
-        // 6.还要刷新当前的时间 因为防止当前的用户就半个小时就消除了
-        stringRedisTemplate.expire(LOGIN_USER_KEY + token,3, TimeUnit.MINUTES);
+        // 有用户,则放行
         return true;
     }
 
