@@ -1,6 +1,8 @@
 package com.hmdp.service.impl;
 
+import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.Result;
@@ -44,22 +46,27 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Override
     public Result queryById(Long id) {
-        // 解决缓存穿透
-        Shop shop = cacheClient
-                .queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
 
-        // 互斥锁解决缓存击穿
-        // Shop shop = cacheClient
-        //         .queryWithMutex(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
-
-        // 逻辑过期解决缓存击穿
-        // Shop shop = cacheClient
-        //         .queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, this::getById, 20L, TimeUnit.SECONDS);
-
-        if (shop == null) {
-            return Result.fail("店铺不存在！");
+        String key = "cach:shop";
+        // 1.查询当前redis有没有这个对应的value
+        String shop = stringRedisTemplate.opsForValue().get(key + id);
+        // 这个api 是hutool里面提供的api,用来进行判断当前的值为不为空
+        if (BeanUtil.isNotEmpty(shop)) {
+            // 2.如果有值就直接返回
+            return Result.ok(shop);
         }
-        // 7.返回
+        // 3.如果没有值 就进行数据的查找
+        Shop shop1 = getById(id);
+        // 4.数据库的查找如果没有值,那么就直接返回404(或者说是前端约定好的方式)
+        if(shop1 == null){
+            return Result.fail("当前商品没有数据");
+        }
+        // 5.数据库有值 先把数据存储到redis
+        // 在存之前 要把当前的数据转成json格式的 因为我们引进来的stringRedisTemplate必须是string类型的
+        shop = JSONUtil.toJsonStr(shop1);
+        stringRedisTemplate.opsForValue().set(key + id,shop);
+        // 6.在把值相应到前端
+
         return Result.ok(shop);
     }
 
