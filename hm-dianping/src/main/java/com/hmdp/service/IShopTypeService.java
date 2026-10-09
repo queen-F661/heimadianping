@@ -3,6 +3,8 @@ package com.hmdp.service;
 import com.hmdp.entity.ShopType;
 import com.baomidou.mybatisplus.extension.service.IService;
 
+import java.util.List;
+
 /**
  * <p>
  *  服务类
@@ -13,4 +15,8 @@ import com.baomidou.mybatisplus.extension.service.IService;
  */
 public interface IShopTypeService extends IService<ShopType> {
 
+    /**
+     * 查询当前的列表数据
+     * */
+    List<ShopType> selectDall();
 }
