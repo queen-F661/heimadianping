@@ -52,15 +52,28 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         String shop = stringRedisTemplate.opsForValue().get(key + id);
         // 这个api 是hutool里面提供的api,用来进行判断当前的值为不为空
         if (BeanUtil.isNotEmpty(shop)) {
+            // 转成shop这个对象返回给前端
+            Shop shop1 = JSONUtil.toBean(shop, Shop.class);
             // 2.如果有值就直接返回
-            return Result.ok(shop);
+            return Result.ok(shop1);
         }
+
+        // 因为上面那个api 会把当前的空字符串过滤掉,他会把除了有效的数据排除在外面 就比如说是“   ”这个也是false 只有是无效数据都会false
+        // 通过判断不为空,就能判断当前的这个值为不为空字符串
+        if(shop != null){
+            return Result.fail("当前商铺没有数据");
+        }
+
         // 3.如果没有值 就进行数据的查找
         Shop shop1 = getById(id);
         // 4.数据库的查找如果没有值,那么就直接返回404(或者说是前端约定好的方式)
         if(shop1 == null){
-            return Result.fail("当前商品没有数据");
+            // 为了解决当前 redis的缓存穿透的问题
+            // 他在往redis数据存储的时候 会把当前的空值转成一个空字符串
+            stringRedisTemplate.opsForValue().set(key + id,"",2,TimeUnit.MINUTES);
+            return Result.fail("当前商铺没有数据");
         }
+
         // 5.数据库有值 先把数据存储到redis
         // 在存之前 要把当前的数据转成json格式的 因为我们引进来的stringRedisTemplate必须是string类型的
         shop = JSONUtil.toJsonStr(shop1);
@@ -73,15 +86,20 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Override
     @Transactional
     public Result update(Shop shop) {
-        Long id = shop.getId();
-        if (id == null) {
-            return Result.fail("店铺id不能为空");
+        String key = "cach:shop";
+        if(shop.getId() == null){
+            return Result.fail("当前更新的值没得");
         }
-        // 1.更新数据库
-        updateById(shop);
-        // 2.删除缓存
-        stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
-        return Result.ok();
+       // 1.先更新数据库的数据
+        boolean b = updateById(shop);
+        // 判断当前的店铺存不存在
+        if(!b){
+           return Result.fail("当前店铺没有");
+        }
+        // 2.删除redis中的数据
+        stringRedisTemplate.delete(key + shop.getId());
+        // 返回当前的数据
+        return Result.ok(shop);
     }
 
     @Override

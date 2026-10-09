@@ -13,6 +13,9 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import static com.hmdp.utils.RedisConstants.CACHE_SHOP_TTL;
 
 
 /**
@@ -51,7 +54,7 @@ public class ShopTypeServiceImpl extends ServiceImpl<ShopTypeMapper, ShopType> i
         }
         // 因为 这个redis要把值转换成String 通过
         // 5.有值 直接把数据存在当前的redis
-        stringRedisTemplate.opsForValue().set(ten,JSONUtil.toJsonStr(sort));
+        stringRedisTemplate.opsForValue().set(ten,JSONUtil.toJsonStr(sort),CACHE_SHOP_TTL, TimeUnit.MINUTES);
         // 6.在把值进行返回
         return sort;
     }
