@@ -1,6 +1,7 @@
 package com.hmdp.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -11,6 +12,7 @@ import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.SystemConstants;
+import org.apache.ibatis.io.ResolverUtil;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
 import org.springframework.data.geo.GeoResults;
@@ -47,31 +49,118 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Override
     public Result queryById(Long id) {
 
+        Shop shop = queryWithPassMutex(id);
+        if(shop == null){
+            return Result.fail("店铺不存在");
+        }
+
+        return Result.ok(shop);
+    }
+
+    /**
+     * redis 缓存击穿解决方案
+     * */
+    public Shop queryWithPassMutex(Long id) {
+
         String key = "cach:shop";
         // 1.查询当前redis有没有这个对应的value
         String shop = stringRedisTemplate.opsForValue().get(key + id);
         // 这个api 是hutool里面提供的api,用来进行判断当前的值为不为空
         if (BeanUtil.isNotEmpty(shop)) {
-            // 转成shop这个对象返回给前端
-            Shop shop1 = JSONUtil.toBean(shop, Shop.class);
-            // 2.如果有值就直接返回
-            return Result.ok(shop1);
+//            // 转成shop这个对象返回给前端
+//            Shop shop1 = JSONUtil.toBean(shop, Shop.class);
+//            // 2.如果有值就直接返回
+//            return Result.ok(shop1);
+            return JSONUtil.toBean(shop,Shop.class);
         }
 
         // 因为上面那个api 会把当前的空字符串过滤掉,他会把除了有效的数据排除在外面 就比如说是“   ”这个也是false 只有是无效数据都会false
         // 通过判断不为空,就能判断当前的这个值为不为空字符串
         if(shop != null){
-            return Result.fail("当前商铺没有数据");
+            // return Result.fail("当前商铺没有数据");
+            return null;
+        }
+        String lockkey = null;
+        Shop shop1 = null;
+
+        try {
+            // 4实现缓存重建
+            // 4.1 获取互斥锁  这个是缓存的key,不是说是前面传递过来的商品key(所以我们需要根据当前的key + id的方式在写一个) 每一个店铺有独一无二当前的key
+            lockkey = "lock:shop:" + id;
+            boolean isLock = tryLock(lockkey);
+            // 4.2 一种是这个锁被别人拿去了,拿不到这个锁
+            if(!isLock){
+                Thread.sleep(50);
+                // 等这个锁能拿到值了 不走这个循环了,这个递归就可以退出来了
+                return queryWithPassMutex(id);
+            }
+            shop = stringRedisTemplate.opsForValue().get(key + id);
+            if (BeanUtil.isNotEmpty(shop)) {
+                return JSONUtil.toBean(shop,Shop.class);
+            }
+            // 4.3 一种是拿到当前的互斥锁,就进行查询数据库,在更新一下redis里面的值
+            // 3.如果没有值 就进行数据的查找
+            shop1 = getById(id);
+
+            Thread.sleep(100);
+
+            // 4.数据库的查找如果没有值,那么就直接返回404(或者说是前端约定好的方式)
+            if(shop1 == null){
+                // 为了解决当前 redis的缓存穿透的问题
+                // 他在往redis数据存储的时候 会把当前的空值转成一个空字符串
+    //            stringRedisTemplate.opsForValue().set(key + id,"",2,TimeUnit.MINUTES);
+    //            return Result.fail("当前商铺没有数据");
+                return shop1;
+            }
+
+            // 5.数据库有值 先把数据存储到redis
+            // 在存之前 要把当前的数据转成json格式的 因为我们引进来的stringRedisTemplate必须是string类型的
+            shop = JSONUtil.toJsonStr(shop1);
+            stringRedisTemplate.opsForValue().set(key + id,shop);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            // 6.把当前的锁进行释放
+            unlock(lockkey);
         }
 
+
+        // 7.在把值相应到前端
+        return shop1;
+    }
+
+    /**
+     * redis 缓存穿透解决方案
+     * */
+    public Shop queryWithPassThrough(Long id){
+
+        String key = "cach:shop";
+        // 1.查询当前redis有没有这个对应的value
+        String shop = stringRedisTemplate.opsForValue().get(key + id);
+        // 这个api 是hutool里面提供的api,用来进行判断当前的值为不为空
+        if (BeanUtil.isNotEmpty(shop)) {
+//            // 转成shop这个对象返回给前端
+//            Shop shop1 = JSONUtil.toBean(shop, Shop.class);
+//            // 2.如果有值就直接返回
+//            return Result.ok(shop1);
+            return JSONUtil.toBean(shop,Shop.class);
+        }
+
+        // 因为上面那个api 会把当前的空字符串过滤掉,他会把除了有效的数据排除在外面 就比如说是“   ”这个也是false 只有是无效数据都会false
+        // 通过判断不为空,就能判断当前的这个值为不为空字符串
+        if(shop != null){
+            // return Result.fail("当前商铺没有数据");
+            return null;
+        }
         // 3.如果没有值 就进行数据的查找
         Shop shop1 = getById(id);
         // 4.数据库的查找如果没有值,那么就直接返回404(或者说是前端约定好的方式)
         if(shop1 == null){
             // 为了解决当前 redis的缓存穿透的问题
             // 他在往redis数据存储的时候 会把当前的空值转成一个空字符串
-            stringRedisTemplate.opsForValue().set(key + id,"",2,TimeUnit.MINUTES);
-            return Result.fail("当前商铺没有数据");
+//            stringRedisTemplate.opsForValue().set(key + id,"",2,TimeUnit.MINUTES);
+//            return Result.fail("当前商铺没有数据");
+            return shop1;
         }
 
         // 5.数据库有值 先把数据存储到redis
@@ -80,8 +169,22 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         stringRedisTemplate.opsForValue().set(key + id,shop);
         // 6.在把值相应到前端
 
-        return Result.ok(shop);
+        return shop1;
     }
+
+
+    // 获取锁
+    private boolean tryLock(String key){
+        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 3, TimeUnit.MINUTES);
+        // 如果说是当前为null或者说是false 他就返回一个false
+        // 相反 这个里面为true的时候也可以进行转换的 这个里面最重要的一点,他帮我们转换成true
+        return BooleanUtil.isTrue(flag);
+    }
+    // 释放锁
+    private void unlock(String key){
+        stringRedisTemplate.delete(key);
+    }
+
 
     @Override
     @Transactional
