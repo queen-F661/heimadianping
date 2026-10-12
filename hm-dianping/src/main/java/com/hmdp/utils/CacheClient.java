@@ -1,9 +1,11 @@
 package com.hmdp.utils;
 
+import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.hmdp.entity.Shop;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -23,155 +25,132 @@ public class CacheClient {
 
     private final StringRedisTemplate stringRedisTemplate;
 
-    private static final ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
-
     public CacheClient(StringRedisTemplate stringRedisTemplate) {
         this.stringRedisTemplate = stringRedisTemplate;
     }
 
-    public void set(String key, Object value, Long time, TimeUnit unit) {
-        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(value), time, unit);
+    /**
+     * 解决redis缓存穿透的问题
+     * @param key 当前redis的key值
+     * @param value 当前的redis的value值
+     * @param time 当前时间的参数
+     * @param unit 时间单位
+     * */
+    public void set(String key,Object value,Long time,TimeUnit unit){
+        // JSONUtil.toJsonStr 转换成一个String类型
+        stringRedisTemplate.opsForValue().set(key,JSONUtil.toJsonStr(value),time,unit);
     }
 
-    public void setWithLogicalExpire(String key, Object value, Long time, TimeUnit unit) {
-        // 设置逻辑过期
+    /**
+     *  解决redis缓存击穿问题
+     *  @param key 当前redis的key值
+     *  @param value 当前的redis的value值
+     *  @param time 当前时间的参数
+     *  @param unit 时间单位
+     * */
+    public void setWithLogicalExpire(String key,Object value,Long time,TimeUnit unit){
         RedisData redisData = new RedisData();
         redisData.setData(value);
-        redisData.setExpireTime(LocalDateTime.now().plusSeconds(unit.toSeconds(time)));
-        // 写入Redis
-        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(redisData));
+        redisData.setExpireTime(LocalDateTime.now().plusSeconds(time));
+
+        // 写入redis里面
+        stringRedisTemplate.opsForValue().set(key,JSONUtil.toJsonStr(redisData));
     }
 
-    public <R,ID> R queryWithPassThrough(
-            String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit){
+    /**
+     * 缓存穿透方案
+     * @param
+     * */
+    public <R,ID> R queryWithPassThrough(String keyPrefix,ID id,Class<R> type,Function<ID,R> dbFallback,Long time,TimeUnit unit){
         String key = keyPrefix + id;
-        // 1.从redis查询商铺缓存
+
+        // 1.查到redis里面有没有值 这个会变成一个json
         String json = stringRedisTemplate.opsForValue().get(key);
-        // 2.判断是否存在
-        if (StrUtil.isNotBlank(json)) {
-            // 3.存在，直接返回
-            return JSONUtil.toBean(json, type);
-        }
-        // 判断命中的是否是空值
-        if (json != null) {
-            // 返回一个错误信息
-            return null;
+        // 这个api 是hutool里面提供的api,用来进行判断当前的值为不为空
+        if (BeanUtil.isNotEmpty(json)) {
+            return JSONUtil.toBean(json,type);
         }
 
-        // 4.不存在，根据id查询数据库
-        R r = dbFallback.apply(id);
-        // 5.不存在，返回错误
-        if (r == null) {
-            // 将空值写入redis
-            stringRedisTemplate.opsForValue().set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
-            // 返回错误信息
+        // 因为上面那个api 会把当前的空字符串过滤掉,他会把除了有效的数据排除在外面 就比如说是“   ”这个也是false 只有是无效数据都会false
+        // 通过判断不为空,就能判断当前的这个值为不为空字符串
+        if(json != null){
+            // return Result.fail("当前商铺没有数据");
             return null;
         }
-        // 6.存在，写入redis
-        this.set(key, r, time, unit);
+        // 3.如果没有值 就进行数据的查找
+        R r = dbFallback.apply(id);
+        // 4.数据库的查找如果没有值,那么就直接返回404(或者说是前端约定好的方式)
+        if(r == null){
+            stringRedisTemplate.opsForValue().set(key,"",time,unit);
+            return null;
+        }
+        // 6.存在,写入redis
+       this.set(key,r,3L,TimeUnit.MINUTES);
+
         return r;
     }
 
-    public <R, ID> R queryWithLogicalExpire(
-            String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
+    /**
+     * redis 缓存击穿
+     * */
+    /**
+     * redis 缓存击穿解决方案
+     * */
+    // 开启一个线程池
+    private final static ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
+    public <R,ID> R queryWithPassMutex(String keyPrefix,ID id,Class<R> type,Function<ID,R> dbFallback,Long time,TimeUnit unit) {
         String key = keyPrefix + id;
-        // 1.从redis查询商铺缓存
+        // 1.查询当前redis有没有这个对应的value
         String json = stringRedisTemplate.opsForValue().get(key);
-        // 2.判断是否存在
-        if (StrUtil.isBlank(json)) {
-            // 3.存在，直接返回
+        // 这个api 是hutool里面提供的api,用来进行判断当前的值为不为空
+        if (BeanUtil.isEmpty(json)) {
             return null;
         }
-        // 4.命中，需要先把json反序列化为对象
-        RedisData redisData = JSONUtil.toBean(json, RedisData.class);
-        R r = JSONUtil.toBean((JSONObject) redisData.getData(), type);
-        LocalDateTime expireTime = redisData.getExpireTime();
-        // 5.判断是否过期
-        if(expireTime.isAfter(LocalDateTime.now())) {
-            // 5.1.未过期，直接返回店铺信息
+        // 1.命中了 要进行判断当前的缓存过没过期(要进行把数据反序列化成一个对象)
+        RedisData bean = JSONUtil.toBean(json, RedisData.class);
+        // 这个是获取数据
+        R r= JSONUtil.toBean((JSONObject) bean.getData(), type);
+        // 这个是获取当前过期时间
+        LocalDateTime expireTime = bean.getExpireTime();
+        if(expireTime.isAfter(LocalDateTime.now())){
+            // 2.未过期 那就直接返回
             return r;
         }
-        // 5.2.已过期，需要缓存重建
-        // 6.缓存重建
-        // 6.1.获取互斥锁
-        String lockKey = LOCK_SHOP_KEY + id;
-        boolean isLock = tryLock(lockKey);
-        // 6.2.判断是否获取锁成功
-        if (isLock){
-            // 6.3.成功，开启独立线程，实现缓存重建
-            CACHE_REBUILD_EXECUTOR.submit(() -> {
-                try {
+
+        // 3.过期了 那就要拿去互斥锁,在判断当前拿没拿到
+        // 先设置当前的key
+        String lockkey = key;
+        boolean lock = tryLock(lockkey);
+        // 4.没拿到,返回旧数据
+        // 5.拿到了,也返回当前的旧数据,在开启一条线程,通过这个线程来进行数据库的访问和更新
+        if(lock){
+            try {
+                // TODO 开启新线程,并且返回当前的数据
+                CACHE_REBUILD_EXECUTOR.submit(()->{
                     // 查询数据库
-                    R newR = dbFallback.apply(id);
-                    // 重建缓存
-                    this.setWithLogicalExpire(key, newR, time, unit);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }finally {
-                    // 释放锁
-                    unlock(lockKey);
-                }
-            });
+                    R apply = dbFallback.apply(id);
+                    // 在把数据放到当前的redis里面
+                    this.setWithLogicalExpire(key,apply,time,unit);
+                });
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            } finally {
+                // 6.在释放当前redis里面的锁
+                unlock(lockkey);
+            }
         }
-        // 6.4.返回过期的商铺信息
+        // // 4 拿没拿到,都会返回旧数据
         return r;
     }
-
-    public <R, ID> R queryWithMutex(
-            String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
-        String key = keyPrefix + id;
-        // 1.从redis查询商铺缓存
-        String shopJson = stringRedisTemplate.opsForValue().get(key);
-        // 2.判断是否存在
-        if (StrUtil.isNotBlank(shopJson)) {
-            // 3.存在，直接返回
-            return JSONUtil.toBean(shopJson, type);
-        }
-        // 判断命中的是否是空值
-        if (shopJson != null) {
-            // 返回一个错误信息
-            return null;
-        }
-
-        // 4.实现缓存重建
-        // 4.1.获取互斥锁
-        String lockKey = LOCK_SHOP_KEY + id;
-        R r = null;
-        try {
-            boolean isLock = tryLock(lockKey);
-            // 4.2.判断是否获取成功
-            if (!isLock) {
-                // 4.3.获取锁失败，休眠并重试
-                Thread.sleep(50);
-                return queryWithMutex(keyPrefix, id, type, dbFallback, time, unit);
-            }
-            // 4.4.获取锁成功，根据id查询数据库
-            r = dbFallback.apply(id);
-            // 5.不存在，返回错误
-            if (r == null) {
-                // 将空值写入redis
-                stringRedisTemplate.opsForValue().set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
-                // 返回错误信息
-                return null;
-            }
-            // 6.存在，写入redis
-            this.set(key, r, time, unit);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }finally {
-            // 7.释放锁
-            unlock(lockKey);
-        }
-        // 8.返回
-        return r;
-    }
-
-    private boolean tryLock(String key) {
-        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 10, TimeUnit.SECONDS);
+    // 获取锁
+    private boolean tryLock(String key){
+        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 3, TimeUnit.MINUTES);
+        // 如果说是当前为null或者说是false 他就返回一个false
+        // 相反 这个里面为true的时候也可以进行转换的 这个里面最重要的一点,他帮我们转换成true
         return BooleanUtil.isTrue(flag);
     }
-
-    private void unlock(String key) {
+    // 释放锁
+    private void unlock(String key){
         stringRedisTemplate.delete(key);
     }
 }
