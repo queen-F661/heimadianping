@@ -183,7 +183,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         redisData.setExpireTime(LocalDateTime.now().plusSeconds(expirSecond));
         // 在把数据返回给redis
 
-        stringRedisTemplate.opsForValue().set("cach:shop" + id,JSONUtil.toJsonStr(redisData));
+        stringRedisTemplate.opsForValue().set("cache:shop" + id,JSONUtil.toJsonStr(redisData));
     }
 
 //    // 获取锁
@@ -202,7 +202,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Override
     @Transactional
     public Result update(Shop shop) {
-        String key = "cach:shop";
+        // 删除缓存必须删和查询同一个key，统一用常量拼，别手写字符串
         if(shop.getId() == null){
             return Result.fail("当前更新的值没得");
         }
@@ -213,7 +213,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
            return Result.fail("当前店铺没有");
         }
         // 2.删除redis中的数据
-        stringRedisTemplate.delete(key + shop.getId());
+        stringRedisTemplate.delete(CACHE_SHOP_KEY + shop.getId());
         // 返回当前的数据
         return Result.ok(shop);
     }

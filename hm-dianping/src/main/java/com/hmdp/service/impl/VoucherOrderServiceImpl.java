@@ -3,6 +3,9 @@ package com.hmdp.service.impl;
 import cn.hutool.core.bean.BeanUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.Result;
+import com.hmdp.dto.UserDTO;
+import com.hmdp.entity.SeckillVoucher;
+import com.hmdp.entity.Voucher;
 import com.hmdp.entity.VoucherOrder;
 import com.hmdp.mapper.VoucherOrderMapper;
 import com.hmdp.service.ISeckillVoucherService;
@@ -23,6 +26,7 @@ import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import javax.annotation.Resource;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -234,9 +238,39 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
+
+
     @Override
     public Result seckillVoucher(Long voucherId) {
-        return null;
+        // 根据 voucherId 去查 tb_seckill_voucher（秒杀券表）
+        SeckillVoucher serviceById = seckillVoucherService.getById(voucherId);
+        // 在根据当前的用户里进行查询当前时间是不是在这个范围
+        // `A.isBefore(B)`：判断 A 这个时间，是不是在 B 时间的前面
+        if (LocalDateTime.now().isBefore(serviceById.getBeginTime())) {
+            return Result.fail("当前时间未开始活动");
+        }
+        if (!LocalDateTime.now().isBefore(serviceById.getEndTime())) {
+            return Result.fail("当前时间未开始活动");
+        }
+        // 在进行查询库存 要是没有 就返回一个错误
+        if(serviceById.getStock() < 1){
+            return Result.fail("库存不足");
+        }
+        // 扣减库存
+        seckillVoucherService.update().setSql("stock = stock -1").eq("voucherId",voucherId).update();
+        // 要是有库存 就把值写进当前数据库中
+        // 创建一个类 把当前类插入进去
+        VoucherOrder voucher = new VoucherOrder();
+        Long orderId = redisIdWorker.nextId("order");
+        // 订单id(全局唯一id)
+        voucher.setId(orderId);
+        // 用户id
+        Long id = UserHolder.getUser().getId();
+        voucher.setUserId(id);
+        // 代金卷id
+        voucher.setVoucherId(voucherId);
+        // 把当前的订单值返回
+        return Result.ok(orderId);
     }
 
 

@@ -2,10 +2,8 @@ package com.hmdp.utils;
 
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.BooleanUtil;
-import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
-import com.hmdp.entity.Shop;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -16,7 +14,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
-import static com.hmdp.utils.RedisConstants.CACHE_NULL_TTL;
 import static com.hmdp.utils.RedisConstants.LOCK_SHOP_KEY;
 
 @Slf4j
@@ -51,7 +48,8 @@ public class CacheClient {
     public void setWithLogicalExpire(String key,Object value,Long time,TimeUnit unit){
         RedisData redisData = new RedisData();
         redisData.setData(value);
-        redisData.setExpireTime(LocalDateTime.now().plusSeconds(time));
+        // 用unit把时间换算成秒，避免"3分钟"被当成"3秒"用
+        redisData.setExpireTime(LocalDateTime.now().plusSeconds(unit.toSeconds(time)));
 
         // 写入redis里面
         stringRedisTemplate.opsForValue().set(key,JSONUtil.toJsonStr(redisData));
@@ -84,8 +82,8 @@ public class CacheClient {
             stringRedisTemplate.opsForValue().set(key,"",time,unit);
             return null;
         }
-        // 6.存在,写入redis
-       this.set(key,r,3L,TimeUnit.MINUTES);
+        // 6.存在,写入redis(时间用调用方传进来的time和unit，别自己写死)
+        this.set(key,r,time,unit);
 
         return r;
     }
@@ -119,24 +117,43 @@ public class CacheClient {
 
         // 3.过期了 那就要拿去互斥锁,在判断当前拿没拿到
         // 先设置当前的key
-        String lockkey = key;
+        // 这个互斥锁要根据业务来进行创建新的 要是都用一个 那么整个项目的请求都在等他一下
+        String lockkey = LOCK_SHOP_KEY + id;
         boolean lock = tryLock(lockkey);
         // 4.没拿到,返回旧数据
         // 5.拿到了,也返回当前的旧数据,在开启一条线程,通过这个线程来进行数据库的访问和更新
         if(lock){
+            // 二次检查：抢到锁后重新查一遍缓存
+            // 因为拿到的锁可能是别人刚释放的，人家可能刚重建完，那就不用再查库了
+            String jsonAgain = stringRedisTemplate.opsForValue().get(key);
+            if (jsonAgain != null) {
+                RedisData beanAgain = JSONUtil.toBean(jsonAgain, RedisData.class);
+                if (beanAgain.getExpireTime().isAfter(LocalDateTime.now())) {
+                    // 别人已经重建完了：还锁，直接返回最新数据
+                    unlock(lockkey);
+                    return JSONUtil.toBean((JSONObject) beanAgain.getData(), type);
+                }
+            }
             try {
                 // TODO 开启新线程,并且返回当前的数据
                 CACHE_REBUILD_EXECUTOR.submit(()->{
-                    // 查询数据库
-                    R apply = dbFallback.apply(id);
-                    // 在把数据放到当前的redis里面
-                    this.setWithLogicalExpire(key,apply,time,unit);
+                    try {
+                        // 查询数据库
+                        R apply = dbFallback.apply(id);
+                        // 在把数据放到当前的redis里面
+                        this.setWithLogicalExpire(key,apply,time,unit);
+                    } catch (Exception e) {
+                        // 异步任务里抛异常没人接，必须记日志，不然重建失败了你都不知道
+                        log.error("缓存重建失败, key:{}", key, e);
+                    } finally {
+                        // 不管干成干砸，都释放锁
+                        unlock(lockkey);
+                    }
                 });
             } catch (Exception e) {
-                throw new RuntimeException(e);
-            } finally {
-                // 6.在释放当前redis里面的锁
+                // submit本身失败：任务没递出去，lambda里的unlock永远不会跑，必须在这还锁
                 unlock(lockkey);
+                throw new RuntimeException(e);
             }
         }
         // // 4 拿没拿到,都会返回旧数据
