@@ -15,6 +15,7 @@ import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.aop.framework.AopContext;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.stream.*;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -244,38 +245,80 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     public Result seckillVoucher(Long voucherId) {
         // 根据 voucherId 去查 tb_seckill_voucher（秒杀券表）
         SeckillVoucher serviceById = seckillVoucherService.getById(voucherId);
-        // 在根据当前的用户里进行查询当前时间是不是在这个范围
+        // 排雷：查不到就直接返回，不然下面 getBeginTime() 会空指针
+        if (serviceById == null) {
+            return Result.fail("优惠券不存在");
+        }
+        // 当前时间只取一次，别在下面反复 LocalDateTime.now()
+        LocalDateTime now = LocalDateTime.now();
+        // 再判断当前时间是不是在活动范围内
         // `A.isBefore(B)`：判断 A 这个时间，是不是在 B 时间的前面
-        if (LocalDateTime.now().isBefore(serviceById.getBeginTime())) {
-            return Result.fail("当前时间未开始活动");
+        if (now.isBefore(serviceById.getBeginTime())) {
+            return Result.fail("活动还未开始");
         }
-        if (!LocalDateTime.now().isBefore(serviceById.getEndTime())) {
-            return Result.fail("当前时间未开始活动");
+        // now 不早于 endTime，说明活动已经结束了（这里文案别写成"未开始"）
+        if (!now.isBefore(serviceById.getEndTime())) {
+            return Result.fail("活动已经结束");
         }
-        // 在进行查询库存 要是没有 就返回一个错误
-        if(serviceById.getStock() < 1){
+        // 再查库存 要是没有 就返回一个错误
+        if (serviceById.getStock() < 1) {
             return Result.fail("库存不足");
         }
-        // 扣减库存
-        seckillVoucherService.update().setSql("stock = stock -1")  // 这个相当于是 set stock = stock -1
-                // 这个相当于是voucherid = id值 and stock(库存) = (我们前面查询出来的库存)
-                .eq("voucher_id",voucherId).gt("stock",0)
-                .update();
-        // 要是有库存 就把值写进当前数据库中
-        // 创建一个类 把当前类插入进去
-        VoucherOrder voucher = new VoucherOrder();
-        Long orderId = redisIdWorker.nextId("order");
-        // 订单id(全局唯一id)
-        voucher.setId(orderId);
-        // 用户id
-        Long id = UserHolder.getUser().getId();
-        voucher.setUserId(id);
-        // 代金卷id
-        voucher.setVoucherId(voucherId);
-        // 把这个值添加进去
-        save(voucher);
-        // 把当前的订单值返回
-        return Result.ok(orderId);
+        // 注意：这里是「调用」方法，要带括号、要传参
+        // 直接写 return createVoucherOrder; 编译器会把它当变量找，找不到就报错
+        Long userId = UserHolder.getUser().getId();
+
+        // 利用字符串常量池，把每个不同的用户 ID 转换成一把“专属于他自己的、全局唯一的锁”
+        // ，从而实现了既能防止同一个人并发重复下单（精准加锁），又不会影响其他人买券（高并发性能）的高级写法！
+        synchronized(userId.toString().intern()) {
+            // 获取代理对象(事务)
+            IVoucherOrderService proxy = (IVoucherOrderService)AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        }
+    }
+
+    /**
+     * 一人一单
+     * 超买问题
+     * */
+    @Transactional
+    public Result createVoucherOrder(Long voucherId) {
+        Long userId = UserHolder.getUser().getId();
+        // 一人一单
+        // 查询相关的用户(根据当前的订单用户id + 优惠卷用户)
+
+            int count = query().eq("user_id", userId).eq("voucher_id", voucherId).count();
+            // 如果有值就直接返回异常给前端
+            if (count > 0) {
+                log.info("用户已经购买了一次");
+                return Result.fail("用户已经购买了一次");
+            }
+            // 创建订单
+            // 扣减库存
+            boolean success = seckillVoucherService.update()
+                    .setSql("stock = stock - 1")  // 这个相当于是 set stock = stock - 1
+                    // 这个相当于是 voucher_id = ? and stock(库存) > 0
+                    .eq("voucher_id", voucherId).gt("stock", 0)
+                    .update();
+            // 扣减失败说明库存已经被抢光了
+            if (!success) {
+                return Result.fail("库存不足");
+            }
+            // 要是有库存 就把值写进当前数据库中
+            // 创建一个类 把当前类插入进去
+            VoucherOrder voucherOrder = new VoucherOrder();
+            Long orderId = redisIdWorker.nextId("order");
+            // 订单id(全局唯一id)
+            voucherOrder.setId(orderId);
+            // 用户id
+            voucherOrder.setUserId(userId);
+            // 代金卷id
+            voucherOrder.setVoucherId(voucherId);
+            // 把这个值添加进去
+            save(voucherOrder);
+            // 把当前的订单id返回，方法声明了 Result 就必须 return，不然编译不过
+            return Result.ok(orderId);
+
     }
 
 
