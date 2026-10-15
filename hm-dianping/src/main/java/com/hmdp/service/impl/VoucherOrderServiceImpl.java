@@ -257,7 +257,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail("库存不足");
         }
         // 扣减库存
-        seckillVoucherService.update().setSql("stock = stock -1").eq("voucherId",voucherId).update();
+        seckillVoucherService.update().setSql("stock = stock -1")  // 这个相当于是 set stock = stock -1
+                // 这个相当于是voucherid = id值 and stock(库存) = (我们前面查询出来的库存)
+                .eq("voucher_id",voucherId).gt("stock",0)
+                .update();
         // 要是有库存 就把值写进当前数据库中
         // 创建一个类 把当前类插入进去
         VoucherOrder voucher = new VoucherOrder();
@@ -269,6 +272,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         voucher.setUserId(id);
         // 代金卷id
         voucher.setVoucherId(voucherId);
+        // 把这个值添加进去
+        save(voucher);
         // 把当前的订单值返回
         return Result.ok(orderId);
     }
