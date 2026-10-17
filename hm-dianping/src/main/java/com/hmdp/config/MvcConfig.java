@@ -12,23 +12,19 @@ import javax.annotation.Resource;
 @Configuration
 public class MvcConfig implements WebMvcConfigurer {
 
-    @Resource
-    private StringRedisTemplate stringRedisTemplate;
 
+    /**
+     * 当前拦截器里面配置的类
+     * */
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        // 登录拦截器
         registry.addInterceptor(new LoginInterceptor())
                 .excludePathPatterns(
-                        "/shop/**",
-                        "/voucher/**",
-                        "/shop-type/**",
-                        "/upload/**",
-                        "/blog/hot",
+                        "/user/login",
                         "/user/code",
-                        "/user/login"
-                ).order(1);
-        // token刷新的拦截器
-        registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate)).addPathPatterns("/**").order(0);
+                        "/shop/**",
+                        "/blog/hot"
+                )
+            ;
     }
 }

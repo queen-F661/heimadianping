@@ -49,7 +49,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
-    private final static String LOGIN_CODE = "login:code:";
 
     @Override
     public Result sendCode(String phone, HttpSession session) {
@@ -66,7 +65,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         String code = RandomUtil.randomNumbers(6);
         System.out.println("当前验证码为:" + code);
         // 4.使用redis进行存储
-        stringRedisTemplate.opsForValue().set(LOGIN_CODE + phone,code,3,TimeUnit.MINUTES);
+        stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone,code,3,TimeUnit.MINUTES);
         // 5.在返回前端
         return Result.ok();
     }
@@ -82,7 +81,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
         // 在进行验证码的比对
         // 先查询redis里面的数据
-        String code = stringRedisTemplate.opsForValue().get(LOGIN_CODE + loginForm.getPhone());
+        String code = stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + loginForm.getPhone());
 
         // 在进行判断
         if(loginForm.getCode() == null || code == null || !code.equals(loginForm.getCode())){
@@ -102,9 +101,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         // 传递给session
         UserDTO userDTO = new UserDTO();
         BeanUtil.copyProperties(user,userDTO);
-        String jsonStr = JSONUtil.toJsonStr(userDTO);
         // 在把数据传递给session
-        session.setAttribute("user",jsonStr);
+        session.setAttribute("user",userDTO);
 
         return Result.ok();
     }
