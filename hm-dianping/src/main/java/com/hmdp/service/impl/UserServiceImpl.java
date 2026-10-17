@@ -4,6 +4,9 @@ import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.bean.copier.CopyOptions;
 import cn.hutool.core.lang.UUID;
 import cn.hutool.core.util.RandomUtil;
+import cn.hutool.json.JSONUtil;
+import com.baomidou.mybatisplus.core.injector.methods.Insert;
+import com.baomidou.mybatisplus.extension.conditions.query.QueryChainWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
@@ -25,6 +28,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
 import static com.hmdp.utils.RedisConstants.*;
@@ -45,68 +49,65 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
+    private final static String LOGIN_CODE = "login:code:";
+
     @Override
     public Result sendCode(String phone, HttpSession session) {
-        // 1.校验手机号
-        if (RegexUtils.isPhoneInvalid(phone)) {
-            // 2.如果不符合，返回错误信息
-            return Result.fail("手机号格式错误！");
+        // 先判断当前的phone来进行判断
+        // 1.如果不是11位 直接返回异常
+        if(phone.length() != 11){
+            return Result.fail("手机号码不是11位");
         }
-        // 3.符合，生成验证码
+        // 2.在判断当前这个手机号格式问题 如果有问题返回异常
+        if(!phone.matches("1[0-9]{10}$")){
+            return Result.fail("当前手机号格式不正确");
+        }
+        // 3.在使用random生成一个验证码 这个验证码打印到这个控制台
         String code = RandomUtil.randomNumbers(6);
-
-        // 4.保存验证码到 session
-        stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone, code, LOGIN_CODE_TTL, TimeUnit.MINUTES);
-
-        // 5.发送验证码
-        log.debug("发送短信验证码成功，验证码：{}", code);
-        // 返回ok
+        System.out.println("当前验证码为:" + code);
+        // 4.使用redis进行存储
+        stringRedisTemplate.opsForValue().set(LOGIN_CODE + phone,code,3,TimeUnit.MINUTES);
+        // 5.在返回前端
         return Result.ok();
     }
 
     @Override
-    public Result login(LoginFormDTO loginForm, HttpSession session) {
-        // 1.校验手机号
-        String phone = loginForm.getPhone();
-        if (RegexUtils.isPhoneInvalid(phone)) {
-            // 2.如果不符合，返回错误信息
-            return Result.fail("手机号格式错误！");
-        }
-        // 3.从redis获取验证码并校验
-        String cacheCode = stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + phone);
-        String code = loginForm.getCode();
-        if (cacheCode == null || !cacheCode.equals(code)) {
-            // 不一致，报错
-            return Result.fail("验证码错误");
-        }
-
-        // 4.一致，根据手机号查询用户 select * from tb_user where phone = ?
-        User user = query().eq("phone", phone).one();
-
-        // 5.判断用户是否存在
-        if (user == null) {
-            // 6.不存在，创建新用户并保存
-            user = createUserWithPhone(phone);
-        }
-
-        // 7.保存用户信息到 redis中
-        // 7.1.随机生成token，作为登录令牌
-        String token = UUID.randomUUID().toString(true);
-        // 7.2.将User对象转为HashMap存储
-        UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
-        Map<String, Object> userMap = BeanUtil.beanToMap(userDTO, new HashMap<>(),
-                CopyOptions.create()
-                        .setIgnoreNullValue(true)
-                        .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString()));
-        // 7.3.存储
-        String tokenKey = LOGIN_USER_KEY + token;
-        stringRedisTemplate.opsForHash().putAll(tokenKey, userMap);
-        // 7.4.设置token有效期
-        stringRedisTemplate.expire(tokenKey, LOGIN_USER_TTL, TimeUnit.MINUTES);
-
-        // 8.返回token
-        return Result.ok(token);
-    }
+//    public Result login(LoginFormDTO loginForm, HttpSession session) {
+//
+//        // 先查寻当前的手机号和当前的格式
+//        // 如果我这里写了 != 11,如何有值进来了,可能会报错
+//        if(loginForm.getPhone() == null || !loginForm.getPhone().matches("1[0-9]{10}$")){
+//            return Result.fail("当前的手机号格式有问题");
+//        }
+//
+//        // 在进行验证码的比对
+//        // 先查询redis里面的数据
+//        String code = stringRedisTemplate.opsForValue().get(LOGIN_CODE + loginForm.getPhone());
+//
+//        // 在进行判断
+//        if(loginForm.getCode() == null || code == null || !code.equals(loginForm.getCode())){
+//            return Result.fail("当前短信验证码错误");
+//        }
+//
+//        // 在根据当前的手机号进行查询相关的数据
+//        User user = query().eq("phone", loginForm.getPhone()).one();
+//        if(user == null){
+//            user = new User();
+//            user.setPhone(loginForm.getPhone());
+//            user.setNickName("user_" +RandomUtil.randomNumbers(10));
+//            save(user);
+//        }
+//
+//        // 因为实体类的信息隐私信息太多 会产生一些安全问题 所以我们把一些无关紧要的字段放到当前的dto里面
+//        // 传递给session
+//        UserDTO userDTO = new UserDTO();
+//        BeanUtil.copyProperties(user,userDTO);
+//        String jsonStr = JSONUtil.toJsonStr(userDTO);
+//        // 在把数据传递给session
+//        session.setAttribute("user",jsonStr);
+//
+//        return Result.ok(userDTO);
+//    }
 
     @Override
     public Result sign() {
