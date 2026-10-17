@@ -72,42 +72,42 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     }
 
     @Override
-//    public Result login(LoginFormDTO loginForm, HttpSession session) {
-//
-//        // 先查寻当前的手机号和当前的格式
-//        // 如果我这里写了 != 11,如何有值进来了,可能会报错
-//        if(loginForm.getPhone() == null || !loginForm.getPhone().matches("1[0-9]{10}$")){
-//            return Result.fail("当前的手机号格式有问题");
-//        }
-//
-//        // 在进行验证码的比对
-//        // 先查询redis里面的数据
-//        String code = stringRedisTemplate.opsForValue().get(LOGIN_CODE + loginForm.getPhone());
-//
-//        // 在进行判断
-//        if(loginForm.getCode() == null || code == null || !code.equals(loginForm.getCode())){
-//            return Result.fail("当前短信验证码错误");
-//        }
-//
-//        // 在根据当前的手机号进行查询相关的数据
-//        User user = query().eq("phone", loginForm.getPhone()).one();
-//        if(user == null){
-//            user = new User();
-//            user.setPhone(loginForm.getPhone());
-//            user.setNickName("user_" +RandomUtil.randomNumbers(10));
-//            save(user);
-//        }
-//
-//        // 因为实体类的信息隐私信息太多 会产生一些安全问题 所以我们把一些无关紧要的字段放到当前的dto里面
-//        // 传递给session
-//        UserDTO userDTO = new UserDTO();
-//        BeanUtil.copyProperties(user,userDTO);
-//        String jsonStr = JSONUtil.toJsonStr(userDTO);
-//        // 在把数据传递给session
-//        session.setAttribute("user",jsonStr);
-//
-//        return Result.ok(userDTO);
-//    }
+    public Result login(LoginFormDTO loginForm, HttpSession session) {
+
+        // 先查寻当前的手机号和当前的格式
+        // 如果我这里写了 != 11,如何有值进来了,可能会报错
+        if(loginForm.getPhone() == null || !loginForm.getPhone().matches("1[0-9]{10}$")){
+            return Result.fail("当前的手机号格式有问题");
+        }
+
+        // 在进行验证码的比对
+        // 先查询redis里面的数据
+        String code = stringRedisTemplate.opsForValue().get(LOGIN_CODE + loginForm.getPhone());
+
+        // 在进行判断
+        if(loginForm.getCode() == null || code == null || !code.equals(loginForm.getCode())){
+            return Result.fail("当前短信验证码错误");
+        }
+
+        // 在根据当前的手机号进行查询相关的数据
+        User user = query().eq("phone", loginForm.getPhone()).one();
+        if(user == null){
+            user = new User();
+            user.setPhone(loginForm.getPhone());
+            user.setNickName("user_" +RandomUtil.randomNumbers(10));
+            save(user);
+        }
+
+        // 因为实体类的信息隐私信息太多 会产生一些安全问题 所以我们把一些无关紧要的字段放到当前的dto里面
+        // 传递给session
+        UserDTO userDTO = new UserDTO();
+        BeanUtil.copyProperties(user,userDTO);
+        String jsonStr = JSONUtil.toJsonStr(userDTO);
+        // 在把数据传递给session
+        session.setAttribute("user",jsonStr);
+
+        return Result.ok();
+    }
 
     @Override
     public Result sign() {
