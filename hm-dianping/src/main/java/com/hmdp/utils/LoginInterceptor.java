@@ -31,26 +31,19 @@ public class LoginInterceptor implements HandlerInterceptor {
      * */
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        String authorization = request.getHeader("authorization");
 
-        // 1.先获取到当前的token
-        String token = request.getHeader("token");
-        // 2.在根据当前的redis获取到当前的用户(使用token)
-        String user = stringRedisTemplate.opsForValue().get("login:user" + token);
-        // 2.判断当前的用户为不为空
+        String user = stringRedisTemplate.opsForValue().get("login:user:" + authorization);
         if(user == null){
+            response.setStatus(401);
             return false;
         }
-        // 3.在就把值存储到线程对象里面
-        UserDTO bean = JSONUtil.toBean(user, UserDTO.class);
-        UserHolder.saveUser(bean);
-        // 4.在进行刷新时间操作
-        stringRedisTemplate.expire("login:user" + token,30, TimeUnit.MINUTES);
         // 5.在返回
         return true;
     }
 
-    @Override
-    public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, @Nullable ModelAndView modelAndView) throws Exception {
-        UserHolder.removeUser();
-    }
+//    @Override
+//    public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, @Nullable ModelAndView modelAndView) throws Exception {
+//        UserHolder.removeUser();
+//    }
 }
