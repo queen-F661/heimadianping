@@ -65,7 +65,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         String code = RandomUtil.randomNumbers(6);
         System.out.println("当前验证码为:" + code);
         // 4.使用redis进行存储
-        stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone,code,3,TimeUnit.MINUTES);
+        stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone,code,1,TimeUnit.MINUTES);
         // 5.在返回前端
         return Result.ok();
     }
@@ -98,13 +98,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         }
 
         // 因为实体类的信息隐私信息太多 会产生一些安全问题 所以我们把一些无关紧要的字段放到当前的dto里面
-        // 传递给session
         UserDTO userDTO = new UserDTO();
         BeanUtil.copyProperties(user,userDTO);
-        // 在把数据传递给session
-        session.setAttribute("user",userDTO);
 
-        return Result.ok();
+        String jsonStr = JSONUtil.toJsonStr(userDTO);
+
+        String token = UUID.randomUUID().toString();
+
+        stringRedisTemplate.opsForValue().set("login:user:" + token,jsonStr,30,TimeUnit.MINUTES);
+
+        return Result.ok(token);
     }
 
     @Override

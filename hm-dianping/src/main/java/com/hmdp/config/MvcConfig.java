@@ -12,13 +12,15 @@ import javax.annotation.Resource;
 @Configuration
 public class MvcConfig implements WebMvcConfigurer {
 
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
 
     /**
      * 当前拦截器里面配置的类
      * */
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(new LoginInterceptor())
+        registry.addInterceptor(new LoginInterceptor(stringRedisTemplate))
                 .excludePathPatterns(
                         "/user/login",
                         "/user/code",
