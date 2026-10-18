@@ -47,27 +47,74 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Override
     public Result queryById(Long id) {
+        Shop shopUser = queryByIDPenetration(id);
+        // 6.在把相应的数据存入返回
+        return Result.ok(shopUser);
+    }
 
+    // 缓存穿透
+    public Shop queryByIDPenetration(Long id){
         // 1.先使用redis查询相关的数据
-        String UserId = stringRedisTemplate.opsForValue().get("shop:" + id);
+        String shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
         // 2.有值直接返回
-        if(StrUtil.isNotBlank(UserId)){
-            Shop shop = JSONUtil.toBean(UserId, Shop.class);
-            return Result.ok(shop);
+        if(StrUtil.isNotBlank(shopJson)){
+            Shop shop = JSONUtil.toBean(shopJson, Shop.class);
+            return shop;
+            // return Result.ok(shop);
+        }
+        if (shopJson != null && shopJson.equals("")) {
+            return null;
+            // return Result.fail("当前商铺不存在");
         }
         // 3.没有值查询数据库
         Shop shopUser = getById(id);
         // 4.数据库没值直接返回
         if(shopUser == null){
-            return Result.fail("当前店铺不存在");
+            stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id,"",CACHE_NULL_TTL,TimeUnit.MINUTES);
+            return null;
+            // return Result.fail("当前商铺不存在");
         }
 
-        String jsonStr = JSONUtil.toJsonStr(shopUser);
         // 5.有值的话把值先存入当前的redis
-        stringRedisTemplate.opsForValue().set("shop:" + id,jsonStr,30,TimeUnit.MINUTES);
+        String jsonStr = JSONUtil.toJsonStr(shopUser);
+        stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id,jsonStr,CACHE_SHOP_TTL,TimeUnit.MINUTES);
         // 6.在把相应的数据存入返回
-        return Result.ok(shopUser);
+        return shopUser;
     }
+
+    /**
+     * @param id 商铺的id
+     * 基于互斥锁解决缓存击穿
+     * */
+//    public Shop queryByIDBreakdown(Long id){
+//        // 1.先使用redis查询相关的数据
+//        String shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
+//        // 2.有值直接返回
+//        if(StrUtil.isNotBlank(shopJson)){
+//            Shop shop = JSONUtil.toBean(shopJson, Shop.class);
+//            return shop;
+//            // return Result.ok(shop);
+//        }
+//        if (shopJson != null && shopJson.equals("")) {
+//
+//            return null;
+//        }
+//        // 3.没有值查询数据库
+//        Shop shopUser = getById(id);
+//        // 4.数据库没值直接返回
+//        if(shopUser == null){
+//            stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id,"",CACHE_NULL_TTL,TimeUnit.MINUTES);
+//            return null;
+//            // return Result.fail("当前商铺不存在");
+//        }
+//
+//        // 5.有值的话把值先存入当前的redis
+//        String jsonStr = JSONUtil.toJsonStr(shopUser);
+//        stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id,jsonStr,CACHE_SHOP_TTL,TimeUnit.MINUTES);
+//        // 6.在把相应的数据存入返回
+//        return shopUser;
+//    }
+
 
     @Override
     @Transactional
