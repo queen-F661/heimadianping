@@ -1,6 +1,9 @@
 package com.hmdp.service.impl;
 
+import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.extra.ssh.JschUtil;
+import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.Result;
@@ -44,23 +47,26 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Override
     public Result queryById(Long id) {
-        // 解决缓存穿透
-        Shop shop = cacheClient
-                .queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
 
-        // 互斥锁解决缓存击穿
-        // Shop shop = cacheClient
-        //         .queryWithMutex(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
-
-        // 逻辑过期解决缓存击穿
-        // Shop shop = cacheClient
-        //         .queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, this::getById, 20L, TimeUnit.SECONDS);
-
-        if (shop == null) {
-            return Result.fail("店铺不存在！");
+        // 1.先使用redis查询相关的数据
+        String UserId = stringRedisTemplate.opsForValue().get("shop:" + id);
+        // 2.有值直接返回
+        if(StrUtil.isNotBlank(UserId)){
+            Shop shop = JSONUtil.toBean(UserId, Shop.class);
+            return Result.ok(shop);
         }
-        // 7.返回
-        return Result.ok(shop);
+        // 3.没有值查询数据库
+        Shop shopUser = getById(id);
+        // 4.数据库没值直接返回
+        if(shopUser == null){
+            return Result.fail("当前店铺不存在");
+        }
+
+        String jsonStr = JSONUtil.toJsonStr(shopUser);
+        // 5.有值的话把值先存入当前的redis
+        stringRedisTemplate.opsForValue().set("shop:" + id,jsonStr,30,TimeUnit.MINUTES);
+        // 6.在把相应的数据存入返回
+        return Result.ok(shopUser);
     }
 
     @Override
