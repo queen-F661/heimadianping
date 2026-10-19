@@ -55,112 +55,16 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Override
     public Result queryById(Long id) {
         // 缓存穿透解决方案
-        // Shop shopUser = queryByIDPenetration(id);
+        // Shop shopUser = cacheClient.queryByIDPenetration(CACHE_SHOP_KEY, id, Shop.class, this::getById);
         // 互斥锁实现缓存击穿问题
         // Shop shopUser  = queryByIDBreakdown01(id);
+        // Shop shopUser = cacheClient.queryByIDBreakdown01(CACHE_SHOP_KEY, LOCK_SHOP_KEY, id, Shop.class, this::getById);
         // 基于逻辑过期解决缓存击穿
-        Shop shopUser = queryByIDBreakdown02(id);
+        // Shop shopUser = queryByIDBreakdown02(id);
+        Shop shopUser = cacheClient.queryByIDBreakdown02(CACHE_SHOP_KEY, LOCK_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL * 60);
         // 6.在把相应的数据存入返回
         return Result.ok(shopUser);
     }
-
-    // 缓存穿透
-    public Shop queryByIDPenetration(Long id){
-        // 1.先使用redis查询相关的数据
-        String shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
-        // 2.有值直接返回
-        if(StrUtil.isNotBlank(shopJson)){
-            Shop shop = JSONUtil.toBean(shopJson, Shop.class);
-            return shop;
-            // return Result.ok(shop);
-        }
-        if (shopJson != null && shopJson.equals("")) {
-            return null;
-            // return Result.fail("当前商铺不存在");
-        }
-
-        // 3.没有值查询数据库
-        Shop shopUser = getById(id);
-        // 4.数据库没值直接返回
-        if(shopUser == null){
-            stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id,"",CACHE_NULL_TTL,TimeUnit.MINUTES);
-            return null;
-            // return Result.fail("当前商铺不存在");
-        }
-
-        // 5.有值的话把值先存入当前的redis
-        String jsonStr = JSONUtil.toJsonStr(shopUser);
-        stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id,jsonStr,CACHE_SHOP_TTL,TimeUnit.MINUTES);
-        // 6.在把相应的数据存入返回
-        return shopUser;
-    }
-
-    /**
-     * @param id 商铺的id
-     * 基于互斥锁解决缓存击穿
-     * */
-    public Shop queryByIDBreakdown01(Long id){
-        // 1.先使用redis查询相关的数据
-        String shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
-        // 2.有值直接返回
-        if(StrUtil.isNotBlank(shopJson)){
-            Shop shop = JSONUtil.toBean(shopJson, Shop.class);
-            return shop;
-            // return Result.ok(shop);
-        }
-        if (shopJson != null && shopJson.equals("")) {
-            return null;
-            // return Result.fail("当前商铺不存在");
-        }
-
-        // 先获取锁
-        String uuid = UUID.randomUUID().toString();
-        Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent(LOCK_SHOP_KEY + id, uuid, 10, TimeUnit.MINUTES);
-
-
-        try {
-            while(Boolean.TRUE.equals(lock) == false){
-                Thread.sleep(50);
-                lock = stringRedisTemplate.opsForValue().setIfAbsent(LOCK_SHOP_KEY + id,uuid, 10,TimeUnit.MINUTES);
-            }
-
-            String shoptest = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
-            if(StrUtil.isNotBlank(shoptest)){
-                Shop shop = JSONUtil.toBean(shoptest, Shop.class);
-
-                return shop;
-            }
-            if (shoptest != null && shoptest.equals("")) {
-                return null;
-                // return Result.fail("当前商铺不存在");
-            }
-
-
-            // 3.没有值查询数据库
-            Shop shopUser = getById(id);
-            // 4.数据库没值直接返回
-            if(shopUser == null){
-                stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id,"",CACHE_NULL_TTL,TimeUnit.MINUTES);
-                return null;
-                // return Result.fail("当前商铺不存在");
-            }
-
-            // 5.有值的话把值先存入当前的redis
-            String jsonStr = JSONUtil.toJsonStr(shopUser);
-            stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id,jsonStr,CACHE_SHOP_TTL,TimeUnit.MINUTES);
-            // 6.在把相应的数据存入返回
-            return shopUser;
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        } finally {
-            stringRedisTemplate.execute(
-                    UNLOCK_SCRIPT,
-                    Collections.singletonList(LOCK_SHOP_KEY + id),
-                    uuid
-            );
-        }
-    }
-
 
     /**
      * @param id 商铺的id
