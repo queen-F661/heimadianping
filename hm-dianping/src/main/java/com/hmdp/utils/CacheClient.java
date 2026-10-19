@@ -8,9 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import javax.annotation.Resource;
 import java.time.LocalDateTime;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
@@ -21,5 +20,22 @@ import static com.hmdp.utils.RedisConstants.LOCK_SHOP_KEY;
 @Component
 public class CacheClient {
 
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
 
+    /**
+     * 写入带「逻辑过期时间」的缓存
+     * 逻辑过期方案：key 本身不设 TTL，靠 value 里的 expireTime 字段判断过期
+     *
+     * @param key 缓存 key
+     * @param value 缓存的值
+     * @param time 逻辑过期时长
+     * @param timeUnit 时间单位
+     */
+    public void setWithLogicalExpire(String key, Object value, Long time, TimeUnit timeUnit) {
+        RedisData redisData = new RedisData();
+        redisData.setData(value);
+        redisData.setExpireTime(LocalDateTime.now().plusSeconds(timeUnit.toSeconds(time)));
+        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(redisData));
+    }
 }

@@ -3,6 +3,7 @@ package com.hmdp.service.impl;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.extra.ssh.JschUtil;
+import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -11,6 +12,7 @@ import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.CacheClient;
+import com.hmdp.utils.RedisData;
 import com.hmdp.utils.SystemConstants;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
@@ -23,8 +25,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
+import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
 
 import static com.hmdp.utils.RedisConstants.*;
 
@@ -48,7 +54,12 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Override
     public Result queryById(Long id) {
-        Shop shopUser = queryByIDPenetration(id);
+        // 缓存穿透解决方案
+        // Shop shopUser = queryByIDPenetration(id);
+        // 互斥锁实现缓存击穿问题
+        // Shop shopUser  = queryByIDBreakdown01(id);
+        // 基于逻辑过期解决缓存击穿
+        Shop shopUser = queryByIDBreakdown02(id);
         // 6.在把相应的数据存入返回
         return Result.ok(shopUser);
     }
@@ -88,7 +99,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
      * @param id 商铺的id
      * 基于互斥锁解决缓存击穿
      * */
-    public Shop queryByIDBreakdown(Long id){
+    public Shop queryByIDBreakdown01(Long id){
         // 1.先使用redis查询相关的数据
         String shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
         // 2.有值直接返回
@@ -104,13 +115,13 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
         // 先获取锁
         String uuid = UUID.randomUUID().toString();
-        Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent("Lock:shop" + id, uuid, 10, TimeUnit.MINUTES);
+        Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent(LOCK_SHOP_KEY + id, uuid, 10, TimeUnit.MINUTES);
 
 
         try {
             while(Boolean.TRUE.equals(lock) == false){
                 Thread.sleep(50);
-                lock = stringRedisTemplate.opsForValue().setIfAbsent("Lock:shop" + id,uuid, 10,TimeUnit.MINUTES);
+                lock = stringRedisTemplate.opsForValue().setIfAbsent(LOCK_SHOP_KEY + id,uuid, 10,TimeUnit.MINUTES);
             }
 
             String shoptest = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
@@ -144,16 +155,102 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         } finally {
             stringRedisTemplate.execute(
                     UNLOCK_SCRIPT,
-                    Collections.singletonList("Lock:shop" + id),
+                    Collections.singletonList(LOCK_SHOP_KEY + id),
                     uuid
             );
         }
-
     }
 
 
+    /**
+     * @param id 商铺的id
+     * 基于逻辑过期解决缓存击穿
+     * */
+    // 创建线程
+    private static final ExecutorService CACHE_REBUILD_EXECUTOR =
+            Executors.newFixedThreadPool(10);
+    public Shop queryByIDBreakdown02(Long id){
+        // 1.先使用redis查询相关的数据
+        String shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
+        // null 和空串都算没缓存（空串是以前方案写进去的空值缓存 / 旧格式脏数据）
+        if (StrUtil.isBlank(shopJson)) {
+            // 冷启动兜底：这个 key 从没预热过，查一次数据库并写入带逻辑过期的缓存
+            // （逻辑过期方案官方假设热点 key 已预热，这里补上兜底，避免首次访问一直返回 null）
+            Shop shopDb = getById(id);
+            if (shopDb == null) {
+                return null;
+            }
+            saveShop2Redis(id, shopDb, CACHE_SHOP_TTL * 60);
+            return shopDb;
+        }
 
+        // 2.反序列化成 RedisData，注意 data 是 Object，Hutool 转出来是 JSONObject，不能直接强转成 Shop
+        RedisData redisData = JSONUtil.toBean(shopJson, RedisData.class);
+        Shop shop = null;
+        if (redisData.getData() != null) {
+            shop = BeanUtil.toBean((JSONObject) redisData.getData(), Shop.class);
+        }
 
+        LocalDateTime expireTime = redisData.getExpireTime();
+        LocalDateTime now = LocalDateTime.now();
+
+        // 3.没过期（或者压根没有 expireTime，说明是旧格式数据）就直接返回
+        // expireTime 为 null 也要防住，不然这里就是个 NPE 大坑
+        if (expireTime != null && expireTime.isAfter(now)) {
+            return shop;
+        }
+
+        // 4.已过期，尝试拿互斥锁，只有拿到锁的线程去重建缓存
+        String uuid = UUID.randomUUID().toString();
+        Boolean lock = stringRedisTemplate.opsForValue()
+                .setIfAbsent(LOCK_SHOP_KEY + id, uuid, LOCK_SHOP_TTL, TimeUnit.SECONDS);
+        if(Boolean.TRUE.equals(lock)){
+            CACHE_REBUILD_EXECUTOR.submit(()->{
+               try {
+                   // 5.查询数据库
+                   Shop shopUser = getById(id);
+                   // 6.数据库没值：不再写空值缓存，否则下次读出来又被当 RedisData 解析，死循环 NPE
+                   if(shopUser == null){
+                       return null;
+                   }
+
+                   // 7.有值的话包装成 RedisData 写回 redis（逻辑过期：key 本身不设 TTL）
+                   saveShop2Redis(id, shopUser, CACHE_SHOP_TTL * 60);
+                   return shopUser;
+               } finally {
+                   unlock(LOCK_SHOP_KEY + id, uuid);
+               }
+            });
+        }
+        // 8.没拿到锁的线程直接返回旧数据（哪怕过期了，也比没有强）
+        return shop;
+    }
+
+    /**
+     * 店铺缓存预热：把店铺数据包装成 RedisData（带逻辑过期时间）写入 redis
+     * 逻辑过期方案下 key 不设 TTL，靠 expireTime 字段判断过期
+     * @param id 商铺 id
+     * @param shop 商铺数据
+     * @param expireSeconds 逻辑过期时间（秒）
+     */
+    public void saveShop2Redis(Long id, Shop shop, Long expireSeconds) {
+        RedisData redisData = new RedisData();
+        redisData.setExpireTime(LocalDateTime.now().plusSeconds(expireSeconds));
+        redisData.setData(shop);
+        stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id, JSONUtil.toJsonStr(redisData));
+    }
+
+    /**
+     * 释放锁：必须用 Lua 脚本保证「判断 + 删除」原子性，
+     * 分两步写（get 再 del）在并发下可能把别人的锁删掉
+     */
+    private void unlock(String key, String uuid) {
+        stringRedisTemplate.execute(
+                UNLOCK_SCRIPT,
+                Collections.singletonList(key),
+                uuid
+        );
+    }
 
 
     @Override
