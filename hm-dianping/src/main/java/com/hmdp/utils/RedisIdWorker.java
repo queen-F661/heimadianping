@@ -53,6 +53,5 @@ public class RedisIdWorker {
 
         // 直接返回数据
         return  beginLong << COUNT_BITS | increment;
-
     }
 }
