@@ -11,6 +11,7 @@ import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.hmdp.service.IVoucherService;
 import com.hmdp.utils.RedisIdWorker;
+import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
@@ -266,16 +267,27 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail("当前的优惠卷已抢完");
         }
         Long user_Id = UserHolder.getUser().getId();
+
+
+        // 1.获取当前锁对象
+        SimpleRedisLock simpleRedisLock = new SimpleRedisLock(stringRedisTemplate, "order" + user_Id);
+        boolean Lock = simpleRedisLock.tryLock(1200);
+        if(!Lock){
+            return Result.fail("当前优惠卷购买失败");
+        }
         // intern()这个是直接去常量池里面进行查询 如果没有,第一次没有就直接插入 后面就直接在常量池进行查找
-        synchronized (user_Id.toString().intern()) {
-            // 获取动态代理对象
-            // 因为 synchronized 块里 this.createVoucherOrder(voucherId)
-            // 这种自己调用自己，是 this 直接调用，不经过代理，@Transactional 完全失效；
-            // 锁释放了事务还没提交，
-            // 别的线程能读到旧数据。所以必须用代理对象来调用，让事务拦截器介入
+        // 获取动态代理对象
+        // 因为 synchronized 块里 this.createVoucherOrder(voucherId)
+        // 这种自己调用自己，是 this 直接调用，不经过代理，@Transactional 完全失效；
+        // 锁释放了事务还没提交，
+        // 别的线程能读到旧数据。所以必须用代理对象来调用，让事务拦截器介入
+        try {
             IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
             return proxy.createVoucherOrder(voucherId);
+        } finally {
+            simpleRedisLock.unlock();
         }
+
     }
 
     /**
