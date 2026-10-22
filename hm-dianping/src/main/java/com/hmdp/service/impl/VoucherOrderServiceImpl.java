@@ -9,11 +9,13 @@ import com.hmdp.entity.VoucherOrder;
 import com.hmdp.mapper.VoucherOrderMapper;
 import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
+import com.hmdp.service.IVoucherService;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.aop.framework.AopContext;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.stream.*;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -238,7 +240,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
     @Override
-    @Transactional
     public Result seckillVoucher(Long voucherId) {
         // 查找当前库存为不为空
         SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
@@ -264,8 +265,35 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if (voucher.getStock() <= 0) {
             return Result.fail("当前的优惠卷已抢完");
         }
+        Long user_Id = UserHolder.getUser().getId();
+        // intern()这个是直接去常量池里面进行查询 如果没有,第一次没有就直接插入 后面就直接在常量池进行查找
+        synchronized (user_Id.toString().intern()) {
+            // 获取动态代理对象
+            // 因为 synchronized 块里 this.createVoucherOrder(voucherId)
+            // 这种自己调用自己，是 this 直接调用，不经过代理，@Transactional 完全失效；
+            // 锁释放了事务还没提交，
+            // 别的线程能读到旧数据。所以必须用代理对象来调用，让事务拦截器介入
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        }
+    }
+
+    /**
+     * 锁如果放在这个方法上,他的锁就是这个类,会导致调用的地方不管是谁都要拿锁 效率太低
+     * 不能根据当前用户进行锁 因为我们这里只需要根据当前的用户进行锁就行 那么效率就会高点
+     * 单独使用结构体包裹 让当前用户id来进行判断 要是通过了就可以进 在下一次通过了在进
+     * */
+    @Transactional
+    public Result createVoucherOrder(Long voucherId) {
+        // 把当前的用户数据在UserHolder
+        Long user_Id = UserHolder.getUser().getId();
+
+        Integer count = query().eq("user_id", user_Id).eq("voucher_id", voucherId).count();
+        if (count > 0){
+            return Result.fail("当前用户已经下过单");
+        }
+
         // 1.先扣减库存
-        // gt
         boolean sucess = seckillVoucherService.update().setSql("stock = stock - 1")  // set stock = stock -1
                 .eq("voucher_id", voucherId)   // where voucher_id = 当前的秒杀卷id and stock = 刚刚查询的库存
                 // cas解决方案
@@ -281,8 +309,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         // 在把当前的唯一生成id也拿过来
         RedisIdWorker redisIdWorker1 = new RedisIdWorker(stringRedisTemplate);
         long id = redisIdWorker1.nextId("order");
-        // 把当前的用户数据在UserHolder
-        Long user_Id = UserHolder.getUser().getId();
+
         // 初始化
         VoucherOrder voucherOrder = new VoucherOrder();
         voucherOrder.setId(id);
@@ -294,5 +321,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         // 在把这个值添加进去
         save(voucherOrder);
         return Result.ok(id);
+
     }
 }

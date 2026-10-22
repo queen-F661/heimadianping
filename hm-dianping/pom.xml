@@ -49,6 +49,18 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+        <!--
+        **spring-boot-starter-aop**：引入 aspectjweaver（内含 org.aspectj.lang.*）。
+        **@EnableAspectJAutoProxy 会注册 AnnotationAwareAspectJAutoProxyCreator，
+        **它在类初始化时就要加载 org.aspectj.lang.annotation.Pointcut，
+        **没有 aspectjweaver 就会 NoClassDefFoundError 启动失败。
+        **注意：只加 @Transactional 时用不到它，因为没有注解时才走 Infrastructure 那套代理；
+        **一旦显式开启 @EnableAspectJAutoProxy，就必须补上这个依赖。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>mysql</groupId>
