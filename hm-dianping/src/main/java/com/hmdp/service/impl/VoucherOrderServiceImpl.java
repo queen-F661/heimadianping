@@ -266,8 +266,11 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
         // 1.先扣减库存
         // gt
-        boolean sucess = seckillVoucherService.update().setSql("stock = stock - 1")
-                .eq("voucher_id", voucherId)
+        boolean sucess = seckillVoucherService.update().setSql("stock = stock - 1")  // set stock = stock -1
+                .eq("voucher_id", voucherId)   // where voucher_id = 当前的秒杀卷id and stock = 刚刚查询的库存
+                // cas解决方案
+                // .eq("stock", voucher.getStock())
+                // cas解决方案改进
                 .gt("stock", 0)
                 .update();
         // 假设当前的小于0 就会返回一个false 会扣减失败
