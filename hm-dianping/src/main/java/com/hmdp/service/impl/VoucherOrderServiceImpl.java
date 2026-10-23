@@ -268,9 +268,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
         Long user_Id = UserHolder.getUser().getId();
 
-
         // 1.获取当前锁对象
-        SimpleRedisLock simpleRedisLock = new SimpleRedisLock(stringRedisTemplate, "order" + user_Id);
+        SimpleRedisLock simpleRedisLock = new SimpleRedisLock(stringRedisTemplate, "order:" + user_Id);
         boolean Lock = simpleRedisLock.tryLock(1200);
         if(!Lock){
             return Result.fail("当前优惠卷购买失败");

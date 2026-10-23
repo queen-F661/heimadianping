@@ -15,6 +15,10 @@ public class SimpleRedisLock implements ILock {
     private final StringRedisTemplate redisTemplate;
     private String name;
 
+    private final long threadId = Thread.currentThread().getId();
+
+    private final String uuid = UUID.randomUUID().toString().replace("-", "");
+
     public SimpleRedisLock(StringRedisTemplate redisTemplate, String name) {
         this.redisTemplate = redisTemplate;
         this.name = name;
@@ -25,14 +29,22 @@ public class SimpleRedisLock implements ILock {
      * */
     @Override
     public boolean tryLock(long timeoutSec) {
-        long threadId = Thread.currentThread().getId();
-        Boolean success = redisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, threadId + "", timeoutSec, TimeUnit.SECONDS);
+        Boolean success = redisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name,uuid + threadId , timeoutSec, TimeUnit.SECONDS);
         return Boolean.TRUE.equals(success);
     }
 
     @Override
     public void unlock() {
-        redisTemplate.delete(KEY_PREFIX + name);
+        // 先查询当前的锁 看是不是当前的业务
+        String Thread = redisTemplate.opsForValue().get(KEY_PREFIX + name);
+        try {
+            if (Thread != null && Thread.equals(uuid + threadId)) {
+                redisTemplate.delete(KEY_PREFIX + name);
+            }
+        } catch (Exception e) {
+            System.out.println("当前锁删除错误");
+        }
+
     }
 
 }
