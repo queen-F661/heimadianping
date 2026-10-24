@@ -10,11 +10,11 @@ import org.springframework.context.annotation.Configuration;
 public class RedissonConfig {
 
     @Bean
-    public RedissonClient redissonClient(){
+    public RedissonClient redissonClient() throws  Exception{
         // 配置
         Config config = new Config();
-        config.useSingleServer().setAddress("redis://192.168.45.128:6379").setPassword("123456");
-        // 创建RedissonClient对象
+        config.useSingleServer().setAddress("redis://192.168.45.128:6379")
+                                .setPassword("123456");
         return Redisson.create(config);
     }
 }

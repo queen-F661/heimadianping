@@ -264,9 +264,11 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         Long user_Id = UserHolder.getUser().getId();
 
         // 1.获取当前锁对象
-        SimpleRedisLock simpleRedisLock = new SimpleRedisLock(stringRedisTemplate, "order:" + user_Id);
-        boolean Lock = simpleRedisLock.tryLock(1200);
-        if(!Lock){
+//        SimpleRedisLock simpleRedisLock = new SimpleRedisLock(stringRedisTemplate, "order:" + user_Id);
+        // boolean Lock = simpleRedisLock.tryLock(1200);
+        RLock Lock = redissonClient.getLock("lock:order:" + user_Id);
+        boolean isLock = Lock.tryLock();
+        if(!isLock){
             return Result.fail("当前优惠卷购买失败");
         }
         // intern()这个是直接去常量池里面进行查询 如果没有,第一次没有就直接插入 后面就直接在常量池进行查找
@@ -279,7 +281,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
             return proxy.createVoucherOrder(voucherId);
         } finally {
-            simpleRedisLock.unlock();
+            // simpleRedisLock.unlock();
+            Lock.unlock();
         }
 
     }
