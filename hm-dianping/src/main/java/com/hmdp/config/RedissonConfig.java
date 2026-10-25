@@ -17,4 +17,20 @@ public class RedissonConfig {
                                 .setPassword("123456");
         return Redisson.create(config);
     }
+
+//    @Bean
+//    public RedissonClient redissonClient02() throws  Exception{
+//        // 配置
+//        Config config = new Config();
+//        config.useSingleServer().setAddress("redis://192.168.45.128:6379");
+//        return Redisson.create(config);
+//    }
+//
+//    @Bean
+//    public RedissonClient redissonClient03() throws  Exception{
+//        // 配置
+//        Config config = new Config();
+//        config.useSingleServer().setAddress("redis://192.168.45.128:6379");
+//        return Redisson.create(config);
+//    }
 }
