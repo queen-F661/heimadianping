@@ -34,6 +34,8 @@ public class BlogController {
 
     @PutMapping("/like/{id}")
     public Result likeBlog(@PathVariable("id") Long id) {
+        // update tb_blog set like = like + 1 where id = #{id}
+        // blogService.update().setSql("liked = liked + 1").eq("id", id).update();
         return blogService.likeBlog(id);
     }
 
@@ -76,9 +78,9 @@ public class BlogController {
         return Result.ok(records);
     }
 
-    @GetMapping("/of/follow")
-    public Result queryBlogOfFollow(
-            @RequestParam("lastId") Long max, @RequestParam(value = "offset", defaultValue = "0") Integer offset){
-        return blogService.queryBlogOfFollow(max, offset);
-    }
+//    @GetMapping("/of/follow")
+//    public Result queryBlogOfFollow(
+//            @RequestParam("lastId") Long max, @RequestParam(value = "offset", defaultValue = "0") Integer offset){
+//        return blogService.queryBlogOfFollow(max, offset);
+//    }
 }

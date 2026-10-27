@@ -1,6 +1,7 @@
 package com.hmdp.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -59,7 +60,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         // 获取当前页数据
         List<Blog> records = page.getRecords();
         // 查询用户
-        records.forEach(blog -> {
+        records.forEach(blog ->  {
             this.queryBlogUser(blog);
             this.isBlogLiked(blog);
         });
@@ -68,55 +69,46 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Override
     public Result queryBlogById(Long id) {
-        // 1.查询blog
         Blog blog = getById(id);
-        if (blog == null) {
-            return Result.fail("笔记不存在！");
+        if(blog == null){
+            return Result.fail("当前博客不存在");
         }
-        // 2.查询blog有关的用户
+        // 填充笔记作者的头像和昵称（复用下面已封装好的 queryBlogUser）
         queryBlogUser(blog);
-        // 3.查询blog是否被点赞
+        // 判断当前登录用户是否点过赞 isBlogLiked(blog);
         isBlogLiked(blog);
         return Result.ok(blog);
     }
 
     private void isBlogLiked(Blog blog) {
-        // 1.获取登录用户
-        UserDTO user = UserHolder.getUser();
-        if (user == null) {
-            // 用户未登录，无需查询是否点赞
-            return;
-        }
-        Long userId = user.getId();
-        // 2.判断当前登录用户是否已经点赞
-        String key = "blog:liked:" + blog.getId();
-        Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
-        blog.setIsLike(score != null);
+        // 获取登录用户
+        Long userId = UserHolder.getUser().getId();
+        String key = "blog:licked:" + blog.getId();
+        // 1.先判断当前当前的redis里面有没有值(当前的key是用做当前的用户id来进行给的)
+        Boolean isMember = stringRedisTemplate.opsForSet().isMember(key, userId.toString());
+        blog.setIsLike(BooleanUtil.isTrue(isMember));
     }
 
     @Override
     public Result likeBlog(Long id) {
-        // 1.获取登录用户
         Long userId = UserHolder.getUser().getId();
-        // 2.判断当前登录用户是否已经点赞
-        String key = BLOG_LIKED_KEY + id;
-        Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
-        if (score == null) {
-            // 3.如果未点赞，可以点赞
-            // 3.1.数据库点赞数 + 1
-            boolean isSuccess = update().setSql("liked = liked + 1").eq("id", id).update();
-            // 3.2.保存用户到Redis的set集合  zadd key value score
-            if (isSuccess) {
-                stringRedisTemplate.opsForZSet().add(key, userId.toString(), System.currentTimeMillis());
-            }
-        } else {
-            // 4.如果已点赞，取消点赞
-            // 4.1.数据库点赞数 -1
-            boolean isSuccess = update().setSql("liked = liked - 1").eq("id", id).update();
-            // 4.2.把用户从Redis的set集合移除
-            if (isSuccess) {
-                stringRedisTemplate.opsForZSet().remove(key, userId.toString());
-            }
+        // 1.先判断当前当前的redis里面有没有值(当前的key是用做当前的用户id来进行给的)
+        String key = "blog:licked:" + id;
+        Boolean isMember = stringRedisTemplate.opsForSet().isMember(key, userId.toString());
+        // 2.如果没有值说明没有点赞
+        // 这个里面如果没有值,就进入到当前这个逻辑里面
+        if(BooleanUtil.isFalse(isMember)){
+            // 2.1 先进行数据库的添加+1
+            update().setSql("liked = liked + 1").eq("id",id).update();
+            // 2.2 在往当前的redis set里面添加
+            stringRedisTemplate.opsForSet().add(key, userId.toString());
+        }
+        // 3.有值的情况下就是说明有点赞的
+        else {
+            // 3.1 先进行数据库的添加-1
+            update().setSql("liked = liked - 1").eq("id",id).update();
+            // 3.2 移除redis里面的数据
+            stringRedisTemplate.opsForSet().remove(key, userId.toString());
         }
         return Result.ok();
     }
@@ -166,54 +158,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         return Result.ok(blog.getId());
     }
 
-    @Override
-    public Result queryBlogOfFollow(Long max, Integer offset) {
-        // 1.获取当前用户
-        Long userId = UserHolder.getUser().getId();
-        // 2.查询收件箱 ZREVRANGEBYSCORE key Max Min LIMIT offset count
-        String key = FEED_KEY + userId;
-        Set<ZSetOperations.TypedTuple<String>> typedTuples = stringRedisTemplate.opsForZSet()
-                .reverseRangeByScoreWithScores(key, 0, max, offset, 2);
-        // 3.非空判断
-        if (typedTuples == null || typedTuples.isEmpty()) {
-            return Result.ok();
-        }
-        // 4.解析数据：blogId、minTime（时间戳）、offset
-        List<Long> ids = new ArrayList<>(typedTuples.size());
-        long minTime = 0; // 2
-        int os = 1; // 2
-        for (ZSetOperations.TypedTuple<String> tuple : typedTuples) { // 5 4 4 2 2
-            // 4.1.获取id
-            ids.add(Long.valueOf(tuple.getValue()));
-            // 4.2.获取分数(时间戳）
-            long time = tuple.getScore().longValue();
-            if(time == minTime){
-                os++;
-            }else{
-                minTime = time;
-                os = 1;
-            }
-        }
 
-        // 5.根据id查询blog
-        String idStr = StrUtil.join(",", ids);
-        List<Blog> blogs = query().in("id", ids).last("ORDER BY FIELD(id," + idStr + ")").list();
-
-        for (Blog blog : blogs) {
-            // 5.1.查询blog有关的用户
-            queryBlogUser(blog);
-            // 5.2.查询blog是否被点赞
-            isBlogLiked(blog);
-        }
-
-        // 6.封装并返回
-        ScrollResult r = new ScrollResult();
-        r.setList(blogs);
-        r.setOffset(os);
-        r.setMinTime(minTime);
-
-        return Result.ok(r);
-    }
 
     private void queryBlogUser(Blog blog) {
         Long userId = blog.getUserId();
