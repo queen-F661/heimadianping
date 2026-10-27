@@ -2,6 +2,8 @@
 local voucherId = ARGV[1]
 -- 1.2 用户id
 local userId = ARGV[2]
+-- 1.3 订单id
+local orderId = ARGV[3]
 
 -- 2.数据key
 -- 2.1 库存key:按"券"维度,一张券一个库存
@@ -32,6 +34,6 @@ end
 redis.call("incrby",stockkey,-1)
 -- 3.4 下单(保存用户id) sadd orderkey userId
 redis.call("sadd",orderkey,userId)
--- 3.5 到此 redis 的活干完了。阻塞队列版不需要 xadd,
---     订单由请求线程自己塞进 Java 内存队列 orderTasks
+-- 3.5 发送到消息队列中,XADD stream.orders * k1 v1 k2 v2
+redis.call("xadd",'stream.orders',"*","userId",userId,"voucherId",voucherId,"id",orderId)
 return 0
