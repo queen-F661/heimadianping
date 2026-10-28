@@ -82,56 +82,61 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     private void isBlogLiked(Blog blog) {
         // 获取登录用户
+        UserDTO user = UserHolder.getUser();
+        if(user == null){
+            // 用户未登录,无需查询是否点赞
+            return;
+        }
         Long userId = UserHolder.getUser().getId();
-        String key = "blog:licked:" + blog.getId();
+        String key = BLOG_LIKED_KEY + blog.getId();
         // 1.先判断当前当前的redis里面有没有值(当前的key是用做当前的用户id来进行给的)
-        Boolean isMember = stringRedisTemplate.opsForSet().isMember(key, userId.toString());
-        blog.setIsLike(BooleanUtil.isTrue(isMember));
+        Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
+        blog.setIsLike(score != null);
     }
 
     @Override
     public Result likeBlog(Long id) {
         Long userId = UserHolder.getUser().getId();
         // 1.先判断当前当前的redis里面有没有值(当前的key是用做当前的用户id来进行给的)
-        String key = "blog:licked:" + id;
-        Boolean isMember = stringRedisTemplate.opsForSet().isMember(key, userId.toString());
+        String key = BLOG_LIKED_KEY + id;
+        Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
         // 2.如果没有值说明没有点赞
         // 这个里面如果没有值,就进入到当前这个逻辑里面
-        if(BooleanUtil.isFalse(isMember)){
+        if(score == null){
             // 2.1 先进行数据库的添加+1
             update().setSql("liked = liked + 1").eq("id",id).update();
-            // 2.2 在往当前的redis set里面添加
-            stringRedisTemplate.opsForSet().add(key, userId.toString());
+            // 2.2 在往当前的redis的set集合 zadd key value score
+            stringRedisTemplate.opsForZSet().add(key, userId.toString(),System.currentTimeMillis());
         }
         // 3.有值的情况下就是说明有点赞的
         else {
             // 3.1 先进行数据库的添加-1
             update().setSql("liked = liked - 1").eq("id",id).update();
             // 3.2 移除redis里面的数据
-            stringRedisTemplate.opsForSet().remove(key, userId.toString());
+            stringRedisTemplate.opsForZSet().remove(key, userId.toString());
         }
         return Result.ok();
     }
 
     @Override
     public Result queryBlogLikes(Long id) {
+        // 先查询当前在redis当前商铺查询前五的数据
         String key = BLOG_LIKED_KEY + id;
-        // 1.查询top5的点赞用户 zrange key 0 4
-        Set<String> top5 = stringRedisTemplate.opsForZSet().range(key, 0, 4);
-        if (top5 == null || top5.isEmpty()) {
-            return Result.ok(Collections.emptyList());
+        Set<String> top5 = stringRedisTemplate.opsForZSet().range(key, 0, 5);
+        if(top5 == null || top5.isEmpty()){
+            return Result.ok();
         }
-        // 2.解析出其中的用户id
+        // 如果当前为空就直接返回
         List<Long> ids = top5.stream().map(Long::valueOf).collect(Collectors.toList());
-        String idStr = StrUtil.join(",", ids);
-        // 3.根据用户id查询用户 WHERE id IN ( 5 , 1 ) ORDER BY FIELD(id, 5, 1)
-        List<UserDTO> userDTOS = userService.query()
-                .in("id", ids).last("ORDER BY FIELD(id," + idStr + ")").list()
-                .stream()
-                .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
-                .collect(Collectors.toList());
-        // 4.返回
-        return Result.ok(userDTOS);
+        // 在拿取到当前用户的id
+        userService.listByIds(ids)
+                .stream().map(user -> BeanUtil.copyProperties(user,UserDTO.class)).collect(Collectors.toList());
+        ;
+        // 根据当前用户的id来进行查询到当前的用户数据
+
+        // 在把当前用户的数据排序进行返回
+
+        return Result.ok();
     }
 
     @Override
