@@ -149,21 +149,19 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         if(!isSuccess){
             return Result.fail("新增笔记失败!");
         }
-        // 3.查询笔记作者的所有粉丝 select * from tb_follow where follow_user_id = ?
+
+        // 查询当前笔记的粉丝 select * from tb_follow where follow_user_id = ?
         List<Follow> follows = followService.query().eq("follow_user_id", user.getId()).list();
-        // 4.推送笔记id给所有粉丝
+        // 推送笔记id给所有的粉丝
         for (Follow follow : follows) {
-            // 4.1.获取粉丝id
             Long userId = follow.getUserId();
-            // 4.2.推送
-            String key = FEED_KEY + userId;
-            stringRedisTemplate.opsForZSet().add(key, blog.getId().toString(), System.currentTimeMillis());
+            // 4.2 推送
+            String key = "feed:" + userId;
+            stringRedisTemplate.opsForZSet().add(key,blog.getId().toString(),System.currentTimeMillis());
         }
         // 5.返回id
         return Result.ok(blog.getId());
     }
-
-
 
     private void queryBlogUser(Blog blog) {
         Long userId = blog.getUserId();

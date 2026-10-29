@@ -80,7 +80,7 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
         Set<String> intersect = stringRedisTemplate.opsForSet().intersect(key01, key02);
         if(intersect == null || intersect.isEmpty()){
             // 无交集
-            return Result.fail("无交集");
+            return Result.ok();
         }
         // 解析id集合 把这个转成list集合 - 里面都是long类型
         List<Long> collect = intersect.stream().map(Long::valueOf).collect(Collectors.toList());
