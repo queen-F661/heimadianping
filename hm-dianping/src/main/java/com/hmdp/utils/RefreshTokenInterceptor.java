@@ -41,7 +41,7 @@ public class RefreshTokenInterceptor implements HandlerInterceptor {
         String user = stringRedisTemplate.opsForValue().get("login:user:" + token);
         // 2.判断当前的用户为不为空
         if(StrUtil.isBlank(user)){
-            return true;
+                return true;
         }
         // 3.在就把值存储到线程对象里面
         UserDTO bean = JSONUtil.toBean(user, UserDTO.class);

@@ -76,7 +76,7 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
         Long id1 = UserHolder.getUser().getId();
         // 拼接当前的key
         String key01 = "follows:" + id;
-        String key02 = "follows:" + id;
+        String key02 = "follows:" + id1;
         Set<String> intersect = stringRedisTemplate.opsForSet().intersect(key01, key02);
         if(intersect == null || intersect.isEmpty()){
             // 无交集

@@ -3,6 +3,7 @@ package com.hmdp.service.impl;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.extension.conditions.query.QueryChainWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.Result;
@@ -141,8 +142,25 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Override
     public Result saveBlog(Blog blog) {
+        // 0.参数校验:tb_blog 里 shop_id/title/images/content 都是 NOT NULL 且无默认值,
+        //   缺任何一个都会在插入时抛 SQL 异常,这里提前拦住,给前端可读的提示
+        if (blog.getShopId() == null) {
+            return Result.fail("缺少店铺id，请从店铺详情页发布探店笔记");
+        }
+        if (StrUtil.isBlank(blog.getTitle())) {
+            return Result.fail("笔记标题不能为空");
+        }
+        if (StrUtil.isBlank(blog.getImages())) {
+            return Result.fail("请至少上传一张探店照片");
+        }
+        if (StrUtil.isBlank(blog.getContent())) {
+            return Result.fail("笔记内容不能为空");
+        }
         // 1.获取登录用户
         UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("请先登录");
+        }
         blog.setUserId(user.getId());
         // 2.保存探店笔记
         boolean isSuccess = save(blog);
@@ -150,17 +168,66 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             return Result.fail("新增笔记失败!");
         }
 
-        // 查询当前笔记的粉丝 select * from tb_follow where follow_user_id = ?
+        // 推送笔记id给所有粉丝
         List<Follow> follows = followService.query().eq("follow_user_id", user.getId()).list();
-        // 推送笔记id给所有的粉丝
         for (Follow follow : follows) {
+            // 1.获取粉丝id
             Long userId = follow.getUserId();
-            // 4.2 推送
-            String key = "feed:" + userId;
+            // 推送
+            String key = FEED_KEY + userId;
             stringRedisTemplate.opsForZSet().add(key,blog.getId().toString(),System.currentTimeMillis());
         }
-        // 5.返回id
         return Result.ok(blog.getId());
+    }
+
+    /**
+     * @param max 上一次最小值
+     * @param offset 偏移量
+     * */
+    @Override
+    public Result queryBlogOfFollow(Long max, Integer offset) {
+
+        // 1.先查询当前用户的id
+        Long userId = UserHolder.getUser().getId();
+        // 2.根据用户id来进行查询笔记id
+        String key = FEED_KEY + userId;
+        Set<ZSetOperations.TypedTuple<String>> typedTuples = stringRedisTemplate.opsForZSet().reverseRangeByScoreWithScores(key, 0, max, offset, 2);
+        // 3.便利循环出当前的时间戳和笔记id
+        // 3.1使用当前的list存储当前的笔记id
+        ArrayList<Long> noteId = new ArrayList<>(typedTuples.size());
+        // 3.2 因为当前需要求出最小时间 所以我们要把值拿出来才行,遍历覆盖掉成最后一个值自然的就是最小值
+        long minTime = 0;
+        // 3.3 偏移度
+        int os = 1;
+        for (ZSetOperations.TypedTuple<String> typedTuple : typedTuples) {
+            // 笔记id
+            Long value = Long.valueOf(typedTuple.getValue());
+            noteId.add(value);
+            // 时间戳
+            long time = typedTuple.getScore().longValue();
+            if(time == minTime){
+                os++;
+            }else {
+                minTime = time;
+                os = 1;
+            }
+        }
+        // 在根据笔记id查询blog
+        String idStr = StrUtil.join(",",noteId);
+        List<Blog> blogs = query().in("id", noteId).last("ORDER BY FIELD(id," + idStr + ")").list();
+
+        for (Blog blog : blogs) {
+            this.queryBlogUser(blog);
+            this.isBlogLiked(blog);
+        }
+        
+        // 组装数据
+        ScrollResult r = new ScrollResult();
+        r.setList(blogs);
+        r.setOffset(os);
+        r.setMinTime(minTime);
+
+        return Result.ok(r);
     }
 
     private void queryBlogUser(Blog blog) {

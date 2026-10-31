@@ -34,6 +34,13 @@ public class CacheClient {
     /** 互斥锁默认过期时间（秒） */
     private static final long LOCK_TTL_SECONDS = 10L;
 
+    /**
+     * @param <R> 当前这个方法泛型类型
+     * @param keyPrefix redis key的前缀
+     * @param id 查询数据的类型
+     * @param clazz 返回类型 转成这个类型返回给controller
+     * @param dbFallback 查询数据的方法
+     * */
     public <R,ID> R queryByIDPenetration(String keyPrefix,ID id,Class<R> clazz,Function<ID,R> dbFallback){
         // 1.先使用redis查询相关的数据
         String shopJson = stringRedisTemplate.opsForValue().get(keyPrefix + id);
@@ -64,6 +71,13 @@ public class CacheClient {
         return shopUser;
     }
 
+    /**
+     * @param <R> 当前这个方法泛型类型
+     * @param keyPrefix redis key的前缀
+     * @param id 查询数据的类型
+     * @param clazz 返回类型 转成这个类型返回给controller
+     * @param dbFallback 查询数据的方法
+     * */
     public <R,ID> R queryByIDBreakdown01(String keyPrefix,String lockUser,ID id,Class<R> clazz,Function<ID,R> dbFallback){
         // 1.先使用redis查询相关的数据
         String shopJson = stringRedisTemplate.opsForValue().get(keyPrefix + id);
@@ -72,7 +86,7 @@ public class CacheClient {
             R r = JSONUtil.toBean(shopJson, clazz);
             return r;
         }
-        if (shopJson != null && shopJson.equals("")) {
+        if (shopJson != null && shopJson.isEmpty()) {
             return null;
         }
 
@@ -80,9 +94,8 @@ public class CacheClient {
         String uuid = UUID.randomUUID().toString();
         Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent(lockUser + id, uuid, 10, TimeUnit.MINUTES);
 
-
         try {
-            while(Boolean.TRUE.equals(lock) == false){
+            while(!Boolean.TRUE.equals(lock)){
                 Thread.sleep(50);
                 lock = stringRedisTemplate.opsForValue().setIfAbsent(lockUser + id,uuid, 10,TimeUnit.MINUTES);
             }
@@ -93,7 +106,7 @@ public class CacheClient {
 
                 return r;
             }
-            if (shoptest != null && shoptest.equals("")) {
+            if (shoptest != null && shoptest.isEmpty()) {
                 return null;
                 // return Result.fail("当前商铺不存在");
             }
