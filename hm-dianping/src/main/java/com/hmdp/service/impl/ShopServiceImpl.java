@@ -82,14 +82,13 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     }
 
     @Override
-    public Result queryShopByType(Integer typeId, Integer current, Double x, Double y) {
+    public Result queryShopByType(Integer typeId, Integer current, Double x, Double y)  {
         // 1.判断是否需要根据坐标查询
         if (x == null || y == null) {
-            // 不需要坐标查询，按数据库查询
             Page<Shop> page = query()
-                    .eq("type_id", typeId)
+                    .eq("typeId", typeId)
                     .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
-            // 返回数据
+            // 前端要的是数组,不是整个 Page 对象
             return Result.ok(page.getRecords());
         }
 
@@ -97,42 +96,46 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         int from = (current - 1) * SystemConstants.DEFAULT_PAGE_SIZE;
         int end = current * SystemConstants.DEFAULT_PAGE_SIZE;
 
-        // 3.查询redis、按照距离排序、分页。结果：shopId、distance
+        // 3.查询redis,按照距离排序、分页 结果:shopId,distance
         String key = SHOP_GEO_KEY + typeId;
-        GeoResults<RedisGeoCommands.GeoLocation<String>> results = stringRedisTemplate.opsForGeo() // GEOSEARCH key BYLONLAT x y BYRADIUS 10 WITHDISTANCE
+        GeoResults<RedisGeoCommands.GeoLocation<String>> results = stringRedisTemplate.opsForGeo()
                 .search(
                         key,
                         GeoReference.fromCoordinate(x, y),
                         new Distance(5000),
                         RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs().includeDistance().limit(end)
                 );
-        // 4.解析出id
-        if (results == null) {
-            return Result.ok(Collections.emptyList());
-        }
+
+        // 4.解析结果:截取from~end的部分,收集商铺id和距离
         List<GeoResult<RedisGeoCommands.GeoLocation<String>>> list = results.getContent();
-        if (list.size() <= from) {
-            // 没有下一页了，结束
+        if (list.isEmpty()) {
             return Result.ok(Collections.emptyList());
         }
-        // 4.1.截取 from ~ end的部分
         List<Long> ids = new ArrayList<>(list.size());
-        Map<String, Distance> distanceMap = new HashMap<>(list.size());
-        list.stream().skip(from).forEach(result -> {
-            // 4.2.获取店铺id
-            String shopIdStr = result.getContent().getName();
-            ids.add(Long.valueOf(shopIdStr));
-            // 4.3.获取距离
-            Distance distance = result.getDistance();
-            distanceMap.put(shopIdStr, distance);
+        Map<Long, Double> distanceMap = new HashMap<>(list.size());
+        list.stream().skip(from).forEach(geoResult -> {
+            // 获取商铺id
+            Long shopId = Long.valueOf(geoResult.getContent().getName());
+            ids.add(shopId);
+            // 获取距离(单位:米)
+            distanceMap.put(shopId, geoResult.getDistance().getValue());
         });
-        // 5.根据id查询Shop
-        String idStr = StrUtil.join(",", ids);
-        List<Shop> shops = query().in("id", ids).last("ORDER BY FIELD(id," + idStr + ")").list();
-        for (Shop shop : shops) {
-            shop.setDistance(distanceMap.get(shop.getId().toString()).getValue());
+        // 边界保护:from 可能已经超过结果总数,此时 ids 为空,IN () 会导致 SQL 语法错误
+        if (ids.isEmpty()) {
+            return Result.ok(Collections.emptyList());
         }
-        // 6.返回
+
+        // 5.根据id查询shop,并用 FIELD 保证返回顺序与redis的距离顺序一致
+        String idStr = StrUtil.join(",", ids);
+        List<Shop> shops = query()
+                .in("id", ids)
+                .last("ORDER BY FIELD(id," + idStr + ")")
+                .list();
+
+        // 6.把距离回填到shop中再返回
+        for (Shop shop : shops) {
+            shop.setDistance(distanceMap.get(shop.getId()));
+        }
         return Result.ok(shops);
     }
 
